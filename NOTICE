@@ -1,0 +1,41 @@
+Colitu VPN for iOS
+Copyright (C) 2026 Colitu
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3. See LICENSE.
+
+The Colitu name and logo are trademarks of Colitu and are not covered by the
+GPL. If you publish your own build, use your own name and logo.
+
+It contains code from the following open-source project. The parts taken
+from it have been modified by Colitu since April 2026.
+
+  OneXray             https://github.com/OneXray/OneXray           GPL-3.0
+                      Copyright (C) OneXray contributors
+                      (Flutter app structure, Xray configuration builder,
+                      VPN service bridge and Swift packet tunnel)
+
+Native components built into the app by scripts/build-libxray.sh, each under
+its own license (pinned commits in docs/core-provenance.md):
+
+  Xray-core           https://github.com/XTLS/Xray-core            MPL-2.0
+  libXray             https://github.com/XTLS/libXray              MIT
+  hev-socks5-tunnel   https://github.com/heiher/hev-socks5-tunnel  MIT
+
+Bundled assets:
+
+  assets/fonts/ColituSans-*.ttf
+      Inter (https://github.com/rsms/inter), renamed "Colitu Sans".
+      SIL Open Font License 1.1, see assets/fonts/OFL.txt.
+  assets/flags/*.png
+      Rendered from flag-icons (https://github.com/lipis/flag-icons), 1x1 set.
+      MIT License, see assets/flags/LICENSE.txt.
+  geoip / geosite data (downloaded or bundled for routing rules)
+      v2fly/geoip (https://github.com/v2fly/geoip)                 CC-BY-SA-4.0
+      v2fly/domain-list-community
+        (https://github.com/v2fly/domain-list-community)            MIT
+
+Flutter and Dart packages are used under their own licenses (see
+pubspec.yaml and pubspec.lock); the app lists them under
+Account > Licences.

@@ -1,0 +1,50 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # The newest Xcode on the runner, like Codemagic's "xcode: latest" (the
+      # default one lacks APIs the plugins use, e.g. isiOSAppOnVision).
+      - name: Select the newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      # build-libxray.sh compiles the core from source; the runner has no Go.
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          cache: true
+      - name: Prepare compile-only iOS dependencies
+        run: |
+          flutter pub get
+          chmod +x scripts/build-libxray.sh scripts/generate-ffi-bindings.sh
+          scripts/build-libxray.sh
+          scripts/generate-ffi-bindings.sh
+      # Infos are deprecation notes of newer Flutter releases; warnings and
+      # errors fail the build.
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+      # Before the tests, so the Swift app and tunnel extension are compiled
+      # even when a test fails.
+      - name: Simulator build without signing
+        run: flutter build ios --simulator --no-codesign
+      - name: Test
+        run: flutter test

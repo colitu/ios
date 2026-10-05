@@ -1,0 +1,539 @@
+workflows:
+  colitu-ios-testflight:
+    name: Colitu iOS TestFlight
+    instance_type: mac_mini_m1
+    max_build_duration: 120
+
+    integrations:
+      app_store_connect: codemagic
+
+    environment:
+      groups:
+        - TESTER
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        BUNDLE_ID: "com.colitu.vpn"
+        TUNNEL_BUNDLE_ID: "com.colitu.vpn.tun"
+        TEAM_ID: "7C74T7SHR5"
+        COLITU_API_BASE_URL: "https://api.colitu.com/api/v1"
+
+    scripts:
+      - name: Prepare Flutter, icons, LibXray and FFI
+        script: |
+          set -e
+          set -x
+
+          flutter pub get
+
+          python3 -m pip install --user Pillow
+
+          python3 scripts/generate-ios-icons.py
+
+          chmod +x scripts/build-libxray.sh
+          scripts/build-libxray.sh
+
+          chmod +x scripts/generate-ffi-bindings.sh
+          scripts/generate-ffi-bindings.sh
+
+          ls -lah ios/Runner/Assets.xcassets/AppIcon.appiconset
+          ls -lah swift/All/LibXray.xcframework
+          ls -lah lib/core/ffi/generated_bindings.dart
+
+      - name: Set up iOS code signing
+        script: |
+          set -e
+          set -x
+
+          if [ -z "${CERTIFICATE_PRIVATE_KEY_B64:-}" ]; then
+            echo "Missing CERTIFICATE_PRIVATE_KEY_B64 in TESTER variable group"
+            exit 1
+          fi
+
+          if [ -z "${CERTIFICATE_KEY_PASSWORD:-}" ]; then
+            echo "Missing CERTIFICATE_KEY_PASSWORD in TESTER variable group"
+            exit 1
+          fi
+
+          if [ -z "${TEAM_ID:-}" ]; then
+            echo "Missing TEAM_ID"
+            exit 1
+          fi
+
+          CERTS_DIR="$HOME/Library/Developer/Xcode/UserData/Certificates"
+          PROFILES_DOWNLOAD_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          PROFILES_INSTALL_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          rm -rf "$CERTS_DIR"
+          rm -rf "$PROFILES_DOWNLOAD_DIR"
+          rm -rf "$PROFILES_INSTALL_DIR"
+
+          mkdir -p "$CERTS_DIR"
+          mkdir -p "$PROFILES_DOWNLOAD_DIR"
+          mkdir -p "$PROFILES_INSTALL_DIR"
+          mkdir -p "$CM_BUILD_DIR/.codemagic"
+
+          set +x
+          echo "$CERTIFICATE_PRIVATE_KEY_B64" | base64 --decode > "$CM_BUILD_DIR/.codemagic/certificate_private_key.pem"
+          chmod 600 "$CM_BUILD_DIR/.codemagic/certificate_private_key.pem"
+          openssl pkey -in "$CM_BUILD_DIR/.codemagic/certificate_private_key.pem" -noout >/dev/null
+          set -x
+
+          keychain initialize
+
+          set +x
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificates-dir "$CERTS_DIR" \
+            --profiles-dir "$PROFILES_DOWNLOAD_DIR" \
+            --certificate-key "@file:$CM_BUILD_DIR/.codemagic/certificate_private_key.pem" \
+            --p12-password "$CERTIFICATE_KEY_PASSWORD"
+
+          app-store-connect fetch-signing-files "$TUNNEL_BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificates-dir "$CERTS_DIR" \
+            --profiles-dir "$PROFILES_DOWNLOAD_DIR" \
+            --certificate-key "@file:$CM_BUILD_DIR/.codemagic/certificate_private_key.pem" \
+            --p12-password "$CERTIFICATE_KEY_PASSWORD"
+
+          keychain add-certificates --certificate-password "$CERTIFICATE_KEY_PASSWORD"
+          set -x
+
+          echo "Downloaded certificates:"
+          ls -lah "$CERTS_DIR"
+
+          echo "Expected Apple Team ID: $TEAM_ID"
+
+          echo "Downloaded profiles:"
+          ls -lah "$PROFILES_DOWNLOAD_DIR"
+
+          INSTALLED_PROFILE_NAMES="$CM_BUILD_DIR/.codemagic/installed_profile_names.txt"
+          INSTALLED_PROFILE_MAP="$CM_BUILD_DIR/.codemagic/installed_profile_map.tsv"
+          : > "$INSTALLED_PROFILE_NAMES"
+          : > "$INSTALLED_PROFILE_MAP"
+
+          print_profile_value() {
+            /usr/libexec/PlistBuddy -c "Print $2" /dev/stdin <<< "$1" 2>/dev/null || true
+          }
+
+          decode_profile() {
+            security cms -D -i "$1"
+          }
+
+          profile_uuid_for_bundle() {
+            awk -F '\t' -v bundle_id="$1" -v team_id="$TEAM_ID" '$1 == bundle_id && $4 == team_id { print $2; exit }' "$INSTALLED_PROFILE_MAP"
+          }
+
+          profile_name_for_bundle() {
+            awk -F '\t' -v bundle_id="$1" -v team_id="$TEAM_ID" '$1 == bundle_id && $4 == team_id { print $3; exit }' "$INSTALLED_PROFILE_MAP"
+          }
+
+          profile_team_for_bundle() {
+            awk -F '\t' -v bundle_id="$1" -v team_id="$TEAM_ID" '$1 == bundle_id && $4 == team_id { print $4; exit }' "$INSTALLED_PROFILE_MAP"
+          }
+
+          normalize_xcode_project_signing() {
+            RESOLVED_TEAM_ID="$RESOLVED_TEAM_ID" \
+            BUNDLE_ID="$BUNDLE_ID" \
+            TUNNEL_BUNDLE_ID="$TUNNEL_BUNDLE_ID" \
+            APP_PROFILE_NAME="$APP_PROFILE_NAME" \
+            TUNNEL_PROFILE_NAME="$TUNNEL_PROFILE_NAME" \
+            python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          path = Path("ios/Runner.xcodeproj/project.pbxproj")
+          original_text = path.read_text()
+          resolved_team_id = os.environ.get("RESOLVED_TEAM_ID", "").strip()
+          bundle_id = os.environ.get("BUNDLE_ID", "").strip()
+          tunnel_bundle_id = os.environ.get("TUNNEL_BUNDLE_ID", "").strip()
+          profile_names = {
+              bundle_id: os.environ.get("APP_PROFILE_NAME", "").strip(),
+              tunnel_bundle_id: os.environ.get("TUNNEL_PROFILE_NAME", "").strip(),
+          }
+          removed = []
+          changed = []
+          identity_changed = []
+          configured = []
+
+          if not resolved_team_id:
+              raise SystemExit("RESOLVED_TEAM_ID is required")
+
+          if not profile_names.get(bundle_id):
+              raise SystemExit(f"Missing provisioning profile name for {bundle_id}")
+
+          if not profile_names.get(tunnel_bundle_id):
+              raise SystemExit(f"Missing provisioning profile name for {tunnel_bundle_id}")
+
+          def setting_key(line):
+              stripped = line.strip()
+              match = re.match(r'^(\s*)("[^"]+"|[A-Za-z0-9_.$()[\]*-]+)\s*=\s*(.*?);\s*$', line)
+              key = match.group(2).strip('"') if match else stripped.split("=", 1)[0].strip().strip('"')
+              return key, match, stripped
+
+          def remove_managed_settings(block):
+              cleaned = []
+              for line in block:
+                  key, _, stripped = setting_key(line)
+                  if (
+                      key == "CODE_SIGN_IDENTITY"
+                      or key.startswith("CODE_SIGN_IDENTITY[")
+                      or key == "CODE_SIGN_STYLE"
+                      or key.startswith("CODE_SIGN_STYLE[")
+                      or key == "DEVELOPMENT_TEAM"
+                      or key.startswith("DEVELOPMENT_TEAM[")
+                      or key == "PROVISIONING_PROFILE"
+                      or key.startswith("PROVISIONING_PROFILE[")
+                      or key == "PROVISIONING_PROFILE_SPECIFIER"
+                      or key.startswith("PROVISIONING_PROFILE_SPECIFIER[")
+                  ):
+                      removed.append(stripped)
+                      continue
+                  cleaned.append(line)
+              return cleaned
+
+          def configure_build_settings(block):
+              bundle = None
+              for line in block:
+                  match = re.search(r'PRODUCT_BUNDLE_IDENTIFIER\s*=\s*"?([^";]+)"?;', line)
+                  if match:
+                      bundle = match.group(1)
+                      break
+
+              if bundle not in profile_names:
+                  cleaned = []
+                  for line in block:
+                      key, match, _ = setting_key(line)
+                      if (
+                          key == "CODE_SIGN_IDENTITY"
+                          or key.startswith("CODE_SIGN_IDENTITY[")
+                      ):
+                          before = line.strip()
+                          if match:
+                              line = f'{match.group(1)}{match.group(2)} = "Apple Distribution";'
+                          else:
+                              line = line.split("=", 1)[0] + '= "Apple Distribution";'
+                          if before != line.strip():
+                              identity_changed.append(f"{before} -> {line.strip()}")
+                      cleaned.append(line)
+                  return cleaned
+
+              profile_name = profile_names[bundle]
+              cleaned = remove_managed_settings(block)
+              indent = None
+              for line in cleaned:
+                  if "PRODUCT_BUNDLE_IDENTIFIER" in line:
+                      indent = re.match(r'^(\s*)', line).group(1)
+                      break
+              if indent is None:
+                  indent = "\t\t\t\t"
+
+              signing_lines = [
+                  f'{indent}CODE_SIGN_IDENTITY = "Apple Distribution";',
+                  f'{indent}"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";',
+                  f'{indent}CODE_SIGN_STYLE = Manual;',
+                  f'{indent}DEVELOPMENT_TEAM = {resolved_team_id};',
+                  f'{indent}"DEVELOPMENT_TEAM[sdk=iphoneos*]" = {resolved_team_id};',
+                  f'{indent}PROVISIONING_PROFILE_SPECIFIER = "{profile_name}";',
+                  f'{indent}"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "{profile_name}";',
+              ]
+
+              insert_index = len(cleaned) - 1
+              for index, line in enumerate(cleaned):
+                  if "CODE_SIGN_ENTITLEMENTS" in line:
+                      insert_index = index + 1
+                      break
+                  if "CLANG_ENABLE_MODULES" in line:
+                      insert_index = index + 1
+
+              configured.append(f"{bundle} -> {profile_name} ({resolved_team_id})")
+              return cleaned[:insert_index] + signing_lines + cleaned[insert_index:]
+
+          text_lines = original_text.splitlines()
+          lines = []
+          index = 0
+          while index < len(text_lines):
+              line = text_lines[index]
+
+              if "ProvisioningStyle = Automatic;" in line:
+                  line = line.replace("ProvisioningStyle = Automatic;", "ProvisioningStyle = Manual;")
+                  changed.append(line.strip())
+
+              if "buildSettings = {" not in line:
+                  lines.append(line)
+                  index += 1
+                  continue
+
+              block = [line]
+              index += 1
+              while index < len(text_lines):
+                  block.append(text_lines[index])
+                  if re.match(r'^\s*};\s*$', text_lines[index]):
+                      index += 1
+                      break
+                  index += 1
+
+              lines.extend(configure_build_settings(block))
+
+          path.write_text("\n".join(lines) + ("\n" if original_text.endswith("\n") else ""))
+
+          print("Removed provisioning profile build settings:")
+          if removed:
+              for item in removed:
+                  print(item)
+          else:
+              print("(none)")
+
+          print("Updated manual signing build settings:")
+          if changed:
+              for item in changed:
+                  print(item)
+          else:
+              print("(none)")
+
+          print("Updated code signing identity build settings:")
+          if identity_changed:
+              for item in identity_changed:
+                  print(item)
+          else:
+              print("(none)")
+
+          print("Configured manual signing profiles:")
+          if configured:
+              for item in configured:
+                  print(item)
+          else:
+              print("(none)")
+          PY
+          }
+
+          echo "Installing downloaded profiles into Xcode MobileDevice directory..."
+          profiles_found=0
+          for profile in "$PROFILES_DOWNLOAD_DIR"/*.mobileprovision; do
+            [ -f "$profile" ] || continue
+            profiles_found=$((profiles_found + 1))
+
+            profile_plist="$(decode_profile "$profile")"
+            uuid="$(print_profile_value "$profile_plist" UUID)"
+            name="$(print_profile_value "$profile_plist" Name)"
+
+            if [ -z "$uuid" ]; then
+              echo "Could not read UUID from provisioning profile: $profile"
+              exit 1
+            fi
+
+            echo "Installing profile: $name"
+            echo "Profile UUID: $uuid"
+            cp "$profile" "$PROFILES_INSTALL_DIR/$uuid.mobileprovision"
+          done
+
+          if [ "$profiles_found" -eq 0 ]; then
+            echo "No .mobileprovision files were downloaded into $PROFILES_DOWNLOAD_DIR"
+            exit 1
+          fi
+
+          echo "Installed profiles:"
+          ls -lah "$PROFILES_INSTALL_DIR"
+
+          echo "Installed provisioning profile metadata:"
+          for profile in "$PROFILES_INSTALL_DIR"/*.mobileprovision; do
+            [ -f "$profile" ] || continue
+
+            profile_plist="$(decode_profile "$profile")"
+            uuid="$(print_profile_value "$profile_plist" UUID)"
+            name="$(print_profile_value "$profile_plist" Name)"
+            team_identifier="$(print_profile_value "$profile_plist" TeamIdentifier:0)"
+            appid="$(print_profile_value "$profile_plist" Entitlements:application-identifier)"
+            entitlement_team="$(print_profile_value "$profile_plist" Entitlements:com.apple.developer.team-identifier)"
+            expiration="$(print_profile_value "$profile_plist" ExpirationDate)"
+            profile_bundle_id="${appid#"$team_identifier".}"
+
+            if [ -z "$uuid" ]; then
+              echo "Could not read UUID from installed provisioning profile: $profile"
+              exit 1
+            fi
+
+            uuid_profile="$PROFILES_INSTALL_DIR/$uuid.mobileprovision"
+            if [ "$profile" != "$uuid_profile" ]; then
+              cp "$profile" "$uuid_profile"
+            fi
+
+            echo "Profile Name: $name"
+            echo "Profile UUID: $uuid"
+            echo "Profile TeamIdentifier: $team_identifier"
+            echo "Profile AppID: $appid"
+            echo "Profile Entitlement Team: $entitlement_team"
+            echo "Profile ExpirationDate: $expiration"
+            printf '%s\n' "$name" >> "$INSTALLED_PROFILE_NAMES"
+
+            printf '%s\t%s\t%s\t%s\n' "$profile_bundle_id" "$uuid" "$name" "$team_identifier" >> "$INSTALLED_PROFILE_MAP"
+          done
+
+          echo "Installed profile map:"
+          cat "$INSTALLED_PROFILE_MAP"
+
+          APP_PROFILE_UUID="$(profile_uuid_for_bundle "$BUNDLE_ID")"
+          APP_PROFILE_NAME="$(profile_name_for_bundle "$BUNDLE_ID")"
+          APP_PROFILE_TEAM="$(profile_team_for_bundle "$BUNDLE_ID")"
+          TUNNEL_PROFILE_UUID="$(profile_uuid_for_bundle "$TUNNEL_BUNDLE_ID")"
+          TUNNEL_PROFILE_NAME="$(profile_name_for_bundle "$TUNNEL_BUNDLE_ID")"
+          TUNNEL_PROFILE_TEAM="$(profile_team_for_bundle "$TUNNEL_BUNDLE_ID")"
+
+          if [ -z "$APP_PROFILE_UUID" ]; then
+            echo "No installed provisioning profile matched bundle id $BUNDLE_ID for team $TEAM_ID"
+            echo "Installed profile map:"
+            cat "$INSTALLED_PROFILE_MAP"
+            exit 1
+          fi
+
+          if [ -z "$TUNNEL_PROFILE_UUID" ]; then
+            echo "No installed provisioning profile matched bundle id $TUNNEL_BUNDLE_ID for team $TEAM_ID"
+            echo "Installed profile map:"
+            cat "$INSTALLED_PROFILE_MAP"
+            exit 1
+          fi
+
+          if [ "$APP_PROFILE_TEAM" != "$TEAM_ID" ] || [ "$TUNNEL_PROFILE_TEAM" != "$TEAM_ID" ]; then
+            echo "Provisioning profiles must belong to team $TEAM_ID."
+            echo "App profile team: $APP_PROFILE_TEAM"
+            echo "Tunnel profile team: $TUNNEL_PROFILE_TEAM"
+            exit 1
+          fi
+
+          RESOLVED_TEAM_ID="$TEAM_ID"
+          export RESOLVED_TEAM_ID
+
+          echo "Matched app profile: $APP_PROFILE_NAME ($APP_PROFILE_UUID)"
+          echo "Matched tunnel profile: $TUNNEL_PROFILE_NAME ($TUNNEL_PROFILE_UUID)"
+          echo "Resolved signing team: $RESOLVED_TEAM_ID"
+
+          echo "Normalizing Xcode project signing before xcode-project use-profiles..."
+          normalize_xcode_project_signing
+
+          xcode-project use-profiles
+
+          if [ ! -f "$HOME/export_options.plist" ]; then
+            echo "Missing generated export options: $HOME/export_options.plist"
+            exit 1
+          fi
+
+          echo "Generated export options:"
+          plutil -p "$HOME/export_options.plist"
+
+          echo "Normalizing export options to installed provisioning profile UUIDs..."
+          /usr/libexec/PlistBuddy -c "Set :teamID $RESOLVED_TEAM_ID" "$HOME/export_options.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :teamID string $RESOLVED_TEAM_ID" "$HOME/export_options.plist"
+          /usr/libexec/PlistBuddy -c "Set :signingStyle manual" "$HOME/export_options.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$HOME/export_options.plist"
+          /usr/libexec/PlistBuddy -c "Delete :provisioningProfiles" "$HOME/export_options.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$HOME/export_options.plist"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$BUNDLE_ID string $APP_PROFILE_UUID" "$HOME/export_options.plist"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$TUNNEL_BUNDLE_ID string $TUNNEL_PROFILE_UUID" "$HOME/export_options.plist"
+
+          echo "Normalized export options:"
+          plutil -p "$HOME/export_options.plist"
+
+          echo "Project provisioning profile settings after xcode-project use-profiles:"
+          grep -nE "PROVISIONING_PROFILE|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|ProvisioningStyle" ios/Runner.xcodeproj/project.pbxproj || true
+
+          echo "Normalizing Xcode project signing for archive..."
+          normalize_xcode_project_signing
+
+          echo "Project signing settings after archive normalization:"
+          grep -nE "PROVISIONING_PROFILE|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|ProvisioningStyle|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER" ios/Runner.xcodeproj/project.pbxproj || true
+
+          if grep -nE "CODE_SIGN_STYLE = Automatic|ProvisioningStyle = Automatic" ios/Runner.xcodeproj/project.pbxproj; then
+            echo "Automatic signing still exists after manual signing configuration."
+            exit 1
+          fi
+
+          if grep -nE 'CODE_SIGN_IDENTITY.*Apple Development' ios/Runner.xcodeproj/project.pbxproj; then
+            echo "Apple Development identity must not be present for App Store manual signing."
+            exit 1
+          fi
+
+          if ! grep -n "PROVISIONING_PROFILE_SPECIFIER" ios/Runner.xcodeproj/project.pbxproj; then
+            echo "Provisioning profile specifiers must be present for manual signing."
+            exit 1
+          fi
+
+      - name: Build iOS release IPA
+        script: |
+          set -e
+          set -x
+
+          echo "Checking Xcode project signing before archive..."
+          grep -nE "PROVISIONING_PROFILE|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|ProvisioningStyle|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER" ios/Runner.xcodeproj/project.pbxproj || true
+
+          if grep -nE "CODE_SIGN_STYLE = Automatic|ProvisioningStyle = Automatic" ios/Runner.xcodeproj/project.pbxproj; then
+            echo "Automatic signing must not be present before archive."
+            exit 1
+          fi
+
+          if grep -nE 'CODE_SIGN_IDENTITY.*Apple Development' ios/Runner.xcodeproj/project.pbxproj; then
+            echo "Apple Development identity must not be present before archive."
+            exit 1
+          fi
+
+          if ! grep -n "PROVISIONING_PROFILE_SPECIFIER" ios/Runner.xcodeproj/project.pbxproj; then
+            echo "Provisioning profile specifiers must be present before archive."
+            exit 1
+          fi
+
+          PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | sed 's/version: *//')"
+          BUILD_NAME="$(echo "$PUBSPEC_VERSION" | cut -d+ -f1)"
+          PUBSPEC_BUILD_NUMBER="$(echo "$PUBSPEC_VERSION" | cut -d+ -f2)"
+          BUILD_NUMBER="${PROJECT_BUILD_NUMBER:-${BUILD_NUMBER:-${PUBSPEC_BUILD_NUMBER:-1}}}"
+
+          echo "Building version $BUILD_NAME+$BUILD_NUMBER"
+          test "${COLITU_API_BASE_URL:-}" = "https://api.colitu.com/api/v1" || {
+            echo "COLITU_API_BASE_URL must target the production client API"
+            exit 1
+          }
+          # The ad-blocking DNS servers are Colitu nodes, so their addresses
+          # are kept out of the public source: set COLITU_ADBLOCK_DOH (comma-
+          # separated https://.../dns-query URLs) in the TESTER variable group.
+          case "${COLITU_ADBLOCK_DOH:-}" in
+            https://*) ;;
+            *)
+              echo "Missing COLITU_ADBLOCK_DOH in TESTER variable group"
+              exit 1
+              ;;
+          esac
+          # Sanity check only: the build itself never talks to the API. Build
+          # machines sometimes fail a DNS lookup for a moment, so retry and
+          # warn instead of failing the whole build on one bad lookup.
+          API_READY=false
+          for attempt in 1 2 3 4 5 6; do
+            if curl --fail --silent --show-error --max-time 15 "${COLITU_API_BASE_URL%/api/v1}/ready" >/dev/null; then
+              API_READY=true
+              break
+            fi
+            echo "API readiness check failed (attempt $attempt), retrying..."
+            sleep $((attempt * 5))
+          done
+          if [ "$API_READY" != true ]; then
+            echo "WARNING: ${COLITU_API_BASE_URL%/api/v1}/ready was not reachable from the build machine; building anyway."
+          fi
+          flutter build ipa --release \
+            --build-name "$BUILD_NAME" \
+            --build-number "$BUILD_NUMBER" \
+            --dart-define="COLITU_API_BASE_URL=${COLITU_API_BASE_URL}" \
+            --dart-define="COLITU_ADBLOCK_DOH=${COLITU_ADBLOCK_DOH}" \
+            --export-options-plist "$HOME/export_options.plist"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/archive/*.xcarchive
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false

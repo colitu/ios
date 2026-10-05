@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Colitu Support
+    url: https://colitu.com/support
+    about: Account, payment and connection problems are handled by Colitu support.
+  - name: Security report
+    url: https://colitu.com/security#disclosure
+    about: Please report vulnerabilities privately to security@colitu.com, not in a public issue.
