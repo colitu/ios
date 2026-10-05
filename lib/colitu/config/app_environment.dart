@@ -21,6 +21,6 @@ abstract final class AppEnvironment {
   static const supportEmail = 'support@colitu.com';
 
   /// Public source code (GPL-3.0).
-  static const sourceCodeUrl = 'https://github.com/Colitu-VPN/colitu-ios';
+  static const sourceCodeUrl = 'https://github.com/colitu/ios';
   static const companyName = 'Avenlith';
 }

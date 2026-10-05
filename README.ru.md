@@ -1,7 +1,7 @@
 # Colitu VPN для iOS
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Colitu-VPN/colitu-ios/ci.yml?branch=main&style=flat-square&label=build&labelColor=101014)](https://github.com/Colitu-VPN/colitu-ios/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/tag/Colitu-VPN/colitu-ios?style=flat-square&label=release&labelColor=101014&color=7c6cff)](https://github.com/Colitu-VPN/colitu-ios/tags)
+[![Build](https://img.shields.io/github/actions/workflow/status/colitu/ios/ci.yml?branch=main&style=flat-square&label=build&labelColor=101014)](https://github.com/colitu/ios/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/colitu/ios?style=flat-square&label=release&labelColor=101014&color=7c6cff)](https://github.com/colitu/ios/tags)
 [![License](https://img.shields.io/badge/license-GPL--3.0-7c6cff?style=flat-square&labelColor=101014)](LICENSE)
 [![Colitu Network](https://img.shields.io/endpoint?url=https://status.colitu.com/api/github-badge/network&style=flat-square)](https://status.colitu.com)
 
