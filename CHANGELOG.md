@@ -2,7 +2,7 @@
 
 Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
-Russian, English and Turkish are also at <https://colitu.com/download/ios>.
+Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
 ## 5.4.2 — next TestFlight build
 
