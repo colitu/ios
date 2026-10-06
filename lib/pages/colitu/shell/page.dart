@@ -3,15 +3,19 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
+import 'package:colitu_vpn/pages/colitu/paused/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/account_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/home_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/locations_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/plan_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/support_tab.dart';
+import 'package:colitu_vpn/pages/colitu/split_tunnel/page.dart';
 import 'package:colitu_vpn/pages/main/url.dart';
 
 enum ColituTab { home, locations, plan, support, account }
@@ -33,6 +37,9 @@ class _ColituShellPageState extends State<ColituShellPage> {
   late ColituTab _tab = widget.initialTab;
   String? _shownNotice;
   var _sessionEnded = false;
+
+  /// The account tab opens scrolled to the privacy mode switch.
+  var _focusPrivacy = false;
 
   @override
   void initState() {
@@ -62,12 +69,59 @@ class _ColituShellPageState extends State<ColituShellPage> {
       showColituToast(context, notice);
     }
     if (notice == null) _shownNotice = null;
+    if (_controller.ruDirectNoticePending &&
+        mounted &&
+        _controller.takeRuDirectNotice()) {
+      unawaited(_showRuDirectNotice());
+    }
   }
 
-  void _select(ColituTab tab) {
+  /// One-time explanation, the first time a connection sends Russian
+  /// addresses outside the tunnel.
+  Future<void> _showRuDirectNotice() async {
+    final loc = ColituLoc.I;
+    final enable = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: Text(loc['privacy.notice.title']),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 6),
+            Text(loc['privacy.notice.body']),
+            CupertinoButton(
+              padding: const EdgeInsets.only(top: 8),
+              onPressed: () => launchUrl(
+                Uri.parse(ColituRuBypass.docsUrl(loc.language)),
+                mode: LaunchMode.externalApplication,
+              ),
+              child: Text(loc['privacy.details']),
+            ),
+          ],
+        ),
+        actions: [
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(loc['privacy.notice.keep']),
+          ),
+          CupertinoDialogAction(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(loc['privacy.notice.enable']),
+          ),
+        ],
+      ),
+    );
+    if (enable == true) await _controller.setPrivacyMode(true);
+  }
+
+  void _select(ColituTab tab, {bool focusPrivacy = false}) {
     if (_tab == tab) return;
     _controller.supportOpen = tab == ColituTab.support;
-    setState(() => _tab = tab);
+    setState(() {
+      _tab = tab;
+      _focusPrivacy = focusPrivacy;
+    });
   }
 
   Future<void> _toggleConnection() async {
@@ -134,11 +188,20 @@ class _ColituShellPageState extends State<ColituShellPage> {
           ColituNavItem(icon: CupertinoIcons.person_fill, label: loc['nav.account']),
         ];
         final Widget body = switch (_tab) {
+          // A paused device (over the plan's device limit) cannot connect:
+          // the home tab explains why and offers the way out.
+          ColituTab.home when _controller.paused != null => ColituPausedView(
+            controller: _controller,
+          ),
           ColituTab.home => HomeTab(
             controller: _controller,
             onToggle: _toggleConnection,
             onChangeLocation: () => _select(ColituTab.locations),
             onOpenPlan: () => _select(ColituTab.plan),
+            onOpenPrivacy: () =>
+                _select(ColituTab.account, focusPrivacy: true),
+            onOpenSplitTunnel: () =>
+                ColituSplitTunnelPage.open(context, _controller),
           ),
           ColituTab.locations => LocationsTab(
             controller: _controller,
@@ -152,6 +215,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
             onOpenSupport: () => _select(ColituTab.support),
             onSignOut: _signOut,
             onSessionEnded: () => _signOut(confirm: false),
+            focusPrivacy: _focusPrivacy,
           ),
         };
         return ColituScaffold(

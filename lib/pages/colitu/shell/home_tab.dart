@@ -2,7 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
+import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
+import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
+import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
@@ -19,12 +23,20 @@ class HomeTab extends StatelessWidget {
     required this.onToggle,
     required this.onChangeLocation,
     required this.onOpenPlan,
+    this.onOpenPrivacy,
+    this.onOpenSplitTunnel,
   });
 
   final ColituConnectionController controller;
   final Future<void> Function() onToggle;
   final VoidCallback onChangeLocation;
   final VoidCallback onOpenPlan;
+
+  /// Opens the privacy mode setting (the "Russian sites outside VPN" chip).
+  final VoidCallback? onOpenPrivacy;
+
+  /// Opens the split-tunneling setting (the "Split tunneling on" chip).
+  final VoidCallback? onOpenSplitTunnel;
 
   @override
   Widget build(BuildContext context) {
@@ -97,6 +109,48 @@ class HomeTab extends StatelessWidget {
             ),
           ),
         ],
+        if (on && routeChipText(c) != null) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: ColituStatusChip(
+              key: const ValueKey('routeChip'),
+              text: routeChipText(c)!,
+              color: ColituColors.lilac,
+            ),
+          ),
+        ],
+        if (c.ruDirectActive) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: Semantics(
+              button: true,
+              child: ColituPressable(
+                key: const ValueKey('ruDirectChip'),
+                onTap: onOpenPrivacy,
+                child: ColituStatusChip(
+                  text: loc['privacy.chip'],
+                  color: ColituColors.warning,
+                ),
+              ),
+            ),
+          ),
+        ],
+        if (c.splitTunnelActive) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: Semantics(
+              button: true,
+              child: ColituPressable(
+                key: const ValueKey('splitTunnelChip'),
+                onTap: onOpenSplitTunnel,
+                child: ColituStatusChip(
+                  text: splitTunnelChipText(c.splitTunnel),
+                  color: ColituColors.lilac,
+                ),
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         Row(
           children: [
@@ -119,6 +173,25 @@ class HomeTab extends StatelessWidget {
             ),
           ],
         ),
+        if (c.trialBanner != null) ...[
+          const SizedBox(height: 12),
+          ColituNotice(
+            key: const ValueKey('trialBanner'),
+            trialBannerText(c.trialBanner!),
+            error: false,
+            action: Wrap(
+              spacing: 16,
+              children: [
+                ColituLinkButton(label: loc['plan.upgrade'], onPressed: onOpenPlan),
+                ColituLinkButton(
+                  label: loc['trial.dismiss'],
+                  onPressed: () => unawaited(c.dismissTrialBanner()),
+                  color: ColituColors.muted,
+                ),
+              ],
+            ),
+          ),
+        ],
         if (c.error != null) ...[
           const SizedBox(height: 12),
           ColituNotice(c.error!),
@@ -269,6 +342,30 @@ class _StatTile extends StatelessWidget {
   }
 }
 
+/// "Entry FI → Exit DE" on a multihop route; with a rotating exit IP the
+/// current exit and the time to the next change. Null for a plain tunnel.
+String? routeChipText(ColituConnectionController c) {
+  final loc = ColituLoc.I;
+  final server = c.connectedServer;
+  if (!c.connected || server == null) return null;
+  if (server.isMultihop) {
+    return loc.format('multihop.home', {
+      'entry': server.entry?.short ?? '?',
+      'exit': server.exit?.short ?? '?',
+    });
+  }
+  final line = c.rotationLine;
+  if (line == null) return null;
+  final left = line.left;
+  if (left == null) return loc.format('rotation.homeNow', {'exit': line.exit});
+  return left > Duration.zero
+      ? loc.format('rotation.home', {
+          'exit': line.exit,
+          'time': ColituRotation.formatCountdown(left),
+        })
+      : loc.format('rotation.homeDue', {'exit': line.exit});
+}
+
 class _LocationCard extends StatelessWidget {
   const _LocationCard({required this.controller, required this.onChange});
 
@@ -288,6 +385,11 @@ class _LocationCard extends StatelessWidget {
         ? (server == null
             ? loc['home.autoPicked']
             : '${loc['home.autoPicked']} · ${c.serverLabel(server)}')
+        : server != null && server.isMultihop
+        ? loc.format('multihop.sub', {
+            'entry': server.entry?.short ?? '?',
+            'exit': server.exit?.short ?? '?',
+          })
         : (server?.countryCode ?? '');
     return ColituPanel(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
@@ -461,7 +563,7 @@ String planStatusOf(ColituUser? user) {
   final expires = user?.expiresAt;
   if ((status == 'active' || status == 'trialing') &&
       expires != null &&
-      expires.isBefore(DateTime.now())) {
+      expires.isBefore(ColituClock.now())) {
     return 'expired';
   }
   return status;
@@ -483,7 +585,7 @@ bool isFreePlan(ColituUser? user) => (user?.plan ?? '').trim().toLowerCase() == 
 /// Short form for one-line rows: "211 days left" or "No expiry".
 String planLeftOf(DateTime expires) {
   final loc = ColituLoc.I;
-  final left = expires.difference(DateTime.now());
+  final left = expires.difference(ColituClock.now());
   if (left.inDays > 3650) return loc['plan.lifetime'];
   final leftText = left.inDays >= 1
       ? loc.count('day', left.inDays)
@@ -493,10 +595,48 @@ String planLeftOf(DateTime expires) {
 
 String planDetailOf(DateTime expires) {
   final loc = ColituLoc.I;
-  final left = expires.difference(DateTime.now());
+  final left = expires.difference(ColituClock.now());
   if (left.inDays > 3650) return loc['plan.lifetime'];
   final leftText = left.inDays >= 1
       ? loc.count('day', left.inDays)
       : loc.count('hour', left.inHours < 1 ? 1 : left.inHours);
   return '${loc.format('plan.until', {'date': loc.date(expires)})} · ${loc.format('plan.left', {'left': leftText})}';
+}
+
+/// "Split tunneling on: 3 sites outside VPN" (or "only 3 use VPN").
+String splitTunnelChipText(SplitTunnelSettings settings) {
+  final loc = ColituLoc.I;
+  final count = loc.count('site', settings.count);
+  return settings.mode == SplitTunnelMode.only
+      ? loc.format('split.chip.only', {'count': count})
+      : loc.format('split.chip.bypass', {'count': count});
+}
+
+/// The trial-end banner. Every number comes from the panel; the part about
+/// paused devices only appears when the account has more devices than the
+/// next plan allows.
+String trialBannerText(TrialTransition trial) {
+  final loc = ColituLoc.I;
+  final left = trial.endsAt.difference(ColituClock.now());
+  final days = left.inHours >= 24
+      ? loc.count('day', (left.inHours / 24).ceil())
+      : loc.count('hour', left.inHours < 1 ? 1 : left.inHours);
+  final plan = trial.toFree
+      ? loc['trial.toFree']
+      : loc.format('trial.toPlan', {'name': trial.nextPlan});
+  final limit = trial.nextDeviceLimit;
+  final devices = limit == null ? null : loc.count('device', limit);
+  final gb = trial.nextMonthlyGb;
+  final details = gb != null && devices != null
+      ? loc.format('trial.details', {'gb': gb, 'devices': devices})
+      : devices ?? (gb == null ? null : '$gb GB');
+  final key = trial.pausesDevices ? 'trial.bannerPaused' : 'trial.banner';
+  final text = loc.format(key, {
+    'days': days,
+    'date': loc.date(trial.endsAt),
+    'plan': plan,
+    'details': details ?? '',
+  });
+  // Without plan numbers the parentheses would be empty.
+  return details == null ? text.replaceAll(' ()', '') : text;
 }

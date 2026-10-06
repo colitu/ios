@@ -147,13 +147,19 @@ class ColituDevice {
   final String? platform;
   final DateTime? lastActiveAt;
 
+  /// Paused because the plan allows fewer devices (`suspended_at`).
+  final DateTime? suspendedAt;
+
   const ColituDevice({
     required this.id,
     required this.name,
     this.current = false,
     this.platform,
     this.lastActiveAt,
+    this.suspendedAt,
   });
+
+  bool get paused => suspendedAt != null;
 
   factory ColituDevice.fromJson(Map<String, dynamic> json) {
     return ColituDevice(
@@ -164,6 +170,7 @@ class ColituDevice {
       lastActiveAt: _date(
         json['lastActiveAt'] ?? json['last_active_at'] ?? json['last_seen_at'],
       ),
+      suspendedAt: _date(json['suspended_at'] ?? json['suspendedAt']),
     );
   }
 
@@ -173,6 +180,7 @@ class ColituDevice {
     current: value,
     platform: platform,
     lastActiveAt: lastActiveAt,
+    suspendedAt: suspendedAt,
   );
 }
 

@@ -28,6 +28,11 @@ class TunJson {
   List<String>? allowAppList;
   List<String>? disallowAppList;
 
+  // apple: strict kill switch (includeAllNetworks + enforceRoutes)
+  bool? includeAllNetworks;
+  // apple: split tunneling CIDRs that leave the tunnel at the routing table
+  List<String>? excludedRoutes;
+
   TunJson(
     this.tunDnsIPv4,
     this.tunDnsIPv6,

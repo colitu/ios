@@ -21,6 +21,21 @@ enum APIErrorCode {
   deviceDisconnected,
   emailNotVerified,
   decodingFailed,
+
+  /// Sign-in needs the code from the authenticator app (two-step sign-in).
+  mfaRequired,
+
+  /// The two-step code (or recovery code) is wrong; try again.
+  mfaInvalidCode,
+
+  /// The sign-in step expired; start again with e-mail and password.
+  mfaTokenExpired,
+
+  /// The account needs two-step sign-in and this build cannot do it.
+  mfaUpdateRequired,
+
+  /// The plan allows fewer devices than are active: this one is paused.
+  deviceOverLimit,
   unknown,
 }
 
@@ -34,6 +49,10 @@ class APIException implements Exception {
   /// (`AUTH_INVALID_CREDENTIALS`, `DEVICE_LIMIT_REACHED`, …), when present.
   final String? backendCode;
 
+  /// The response body of errors that carry data the app needs
+  /// (`MFA_REQUIRED`: `mfa_token`; `DEVICE_OVER_LIMIT`: `active_devices`).
+  final Map<String, dynamic>? details;
+
   // A cached credential must never override a control-plane access decision.
   bool get allowsConfigFallback =>
       !terminalAuthFailure &&
@@ -46,6 +65,7 @@ class APIException implements Exception {
     this.statusCode,
     this.terminalAuthFailure = false,
     this.backendCode,
+    this.details,
   });
 
   APIException withBackendCode(String? code) {
@@ -56,13 +76,34 @@ class APIException implements Exception {
       statusCode: statusCode,
       terminalAuthFailure: terminalAuthFailure,
       backendCode: code,
+      details: details,
     );
   }
 
+  APIException _withDetails(Object? data) {
+    if (data is! Map<String, dynamic> || !_detailCodes.contains(backendCode)) {
+      return this;
+    }
+    return APIException(
+      code,
+      message,
+      statusCode: statusCode,
+      terminalAuthFailure: terminalAuthFailure,
+      backendCode: backendCode,
+      details: data,
+    );
+  }
+
+  static const _detailCodes = {
+    'MFA_REQUIRED',
+    'MFA_INVALID_CODE',
+    'DEVICE_OVER_LIMIT',
+  };
+
   factory APIException.fromResponse(Response<dynamic> response) {
-    return APIException._fromResponse(
-      response,
-    ).withBackendCode(_codeFromData(response.data));
+    return APIException._fromResponse(response)
+        .withBackendCode(_codeFromData(response.data))
+        ._withDetails(response.data);
   }
 
   factory APIException._fromResponse(Response<dynamic> response) {
@@ -326,6 +367,36 @@ class APIException implements Exception {
         return APIException(
           APIErrorCode.emailNotVerified,
           'Please verify your email to continue.',
+          statusCode: statusCode,
+        );
+      case 'MFA_REQUIRED':
+        return APIException(
+          APIErrorCode.mfaRequired,
+          'Enter the code from your authenticator app.',
+          statusCode: statusCode,
+        );
+      case 'MFA_INVALID_CODE':
+        return APIException(
+          APIErrorCode.mfaInvalidCode,
+          'The code is not correct.',
+          statusCode: statusCode,
+        );
+      case 'MFA_TOKEN_EXPIRED':
+        return APIException(
+          APIErrorCode.mfaTokenExpired,
+          'The sign-in took too long. Please sign in again.',
+          statusCode: statusCode,
+        );
+      case 'MFA_REQUIRED_UPDATE_APP':
+        return APIException(
+          APIErrorCode.mfaUpdateRequired,
+          'Update Colitu to sign in with two-step verification.',
+          statusCode: statusCode,
+        );
+      case 'DEVICE_OVER_LIMIT':
+        return APIException(
+          APIErrorCode.deviceOverLimit,
+          'This device is paused: your plan allows fewer devices.',
           statusCode: statusCode,
         );
     }

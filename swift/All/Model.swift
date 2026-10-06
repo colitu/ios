@@ -33,6 +33,13 @@ struct TunJson: Codable {
     var perAppVPNMode: String?
     var allowAppList: [String]?
     var disallowAppList: [String]?
+    /// Strict kill switch: the VPN profile captures all traffic
+    /// (`includeAllNetworks` + `enforceRoutes`). Absent means off.
+    var includeAllNetworks: Bool?
+    /// Split tunneling: CIDRs ("203.0.113.0/24", "2001:db8::/32") that leave
+    /// the tunnel at the routing table. Ignored while `includeAllNetworks`
+    /// is on; the core's own direct rules cover them then.
+    var excludedRoutes: [String]?
 }
 
 struct StartVpnRequest: Codable {

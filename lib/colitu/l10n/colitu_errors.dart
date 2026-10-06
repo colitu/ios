@@ -93,6 +93,16 @@ String colituErrorMessage(Object error, {bool signingIn = false}) {
       case 'CONFIG_NOT_AVAILABLE':
       case 'INVALID_PREFERENCE':
         return loc['err.noServers'];
+      case 'MULTIHOP_ROUTE_NOT_FOUND':
+        return loc['multihop.gone'];
+      case 'MFA_INVALID_CODE':
+        return loc['mfa.err.invalid'];
+      case 'MFA_TOKEN_EXPIRED':
+        return loc['mfa.err.expired'];
+      case 'MFA_REQUIRED_UPDATE_APP':
+        return loc['mfa.err.update'];
+      case 'DEVICE_OVER_LIMIT':
+        return loc['paused.title'];
     }
     switch (error.code) {
       case APIErrorCode.unauthorized:
@@ -116,6 +126,16 @@ String colituErrorMessage(Object error, {bool signingIn = false}) {
         return loc['err.network'];
       case APIErrorCode.vpnPermissionDenied:
         return loc['err.permission'];
+      case APIErrorCode.mfaInvalidCode:
+        return loc['mfa.err.invalid'];
+      case APIErrorCode.mfaTokenExpired:
+        return loc['mfa.err.expired'];
+      case APIErrorCode.mfaUpdateRequired:
+        return loc['mfa.err.update'];
+      case APIErrorCode.deviceOverLimit:
+        return loc['paused.title'];
+      case APIErrorCode.mfaRequired:
+        return loc['mfa.title'];
       case APIErrorCode.emailNotVerified:
       case APIErrorCode.purchaseCancelled:
       case APIErrorCode.purchasePending:

@@ -1,4 +1,5 @@
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
+import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/service/tun_setting/state.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
 import 'package:colitu_vpn/service/xray/constants.dart';
@@ -30,6 +31,30 @@ class XrayRawFix {
     fixMetrics(jsonMap);
     fixDnsLeakProtection(jsonMap);
     fixRussianIpBypass(jsonMap);
+    // After the Russian rule: privacy mode never filters the user's list.
+    ColituSplitTunnel.applyTo(jsonMap, ColituSplitTunnel.current);
+    if (!tunSettingState.enableIPv6) fixIPv4OnlyDns(jsonMap);
+  }
+
+  /// IPv6 is off: the tunnel drops IPv6 packets, so the core's DNS answers
+  /// without AAAA records and apps go straight to IPv4 instead of first
+  /// trying IPv6 addresses that cannot work. Only an existing `dns` section
+  /// is changed; without one the core keeps its defaults.
+  static void fixIPv4OnlyDns(Map<String, dynamic> jsonMap) {
+    final dns = jsonMap["dns"];
+    if (dns is! Map<String, dynamic>) {
+      return;
+    }
+    dns["queryStrategy"] = "UseIPv4";
+    final servers = dns["servers"];
+    if (servers is! List<dynamic>) {
+      return;
+    }
+    for (final server in servers) {
+      if (server is Map<String, dynamic> && server["queryStrategy"] != null) {
+        server["queryStrategy"] = "UseIPv4";
+      }
+    }
   }
 
   static void fixDnsLeakProtection(Map<String, dynamic> jsonMap) {
@@ -91,8 +116,12 @@ class XrayRawFix {
       return item is Map<String, dynamic> &&
           item["ruleTag"] == RoutingRuleTag.ruBypass;
     });
+    if (ColituRuBypass.privacyMode) {
+      _removeRussianDirect(rules, outbounds);
+    }
     if (!ColituRuBypass.applies) {
-      // Server in Russia: Russian sites go through it like everything else.
+      // Privacy mode, or a server in Russia: Russian sites go through the
+      // tunnel like everything else.
       return;
     }
     final insertIndex = _dnsRulePrefixLength(rules);
@@ -101,6 +130,45 @@ class XrayRawFix {
       "ip": <String>["geoip:RU"],
       "outboundTag": RoutingOutboundTag.direct.name,
       "ruleTag": RoutingRuleTag.ruBypass,
+    });
+  }
+
+  /// Privacy mode: Russian matchers leave every rule that sends traffic to a
+  /// direct (freedom) outbound, including rules the raw configuration brought.
+  static void _removeRussianDirect(
+    List<dynamic> rules,
+    List<dynamic> outbounds,
+  ) {
+    final directTags = <Object?>{
+      RoutingOutboundTag.direct.name,
+      for (final item in outbounds)
+        if (item is Map<String, dynamic> && item["protocol"] == "freedom")
+          item["tag"],
+    };
+    rules.removeWhere((item) {
+      if (item is! Map<String, dynamic> ||
+          !directTags.contains(item["outboundTag"])) {
+        return false;
+      }
+      final domain = item["domain"];
+      final ip = item["ip"];
+      final lists = ColituRuBypass.withoutRussian<dynamic>(
+        domain is List<dynamic> ? domain : null,
+        ip is List<dynamic> ? ip : null,
+      );
+      if (lists == null) return true;
+      for (final (key, values) in [
+        ("domain", lists.domain),
+        ("ip", lists.ip),
+      ]) {
+        if (values == null) continue;
+        if (values.isEmpty) {
+          item.remove(key);
+        } else {
+          item[key] = values;
+        }
+      }
+      return false;
     });
   }
 

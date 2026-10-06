@@ -25,6 +25,11 @@ class TunSettingState {
   var allowAppList = <String>{};
   var disallowAppList = <String>{};
 
+  // apple, set for every start from the Colitu settings (not stored here):
+  // the strict kill switch and the split-tunneling routes.
+  var includeAllNetworks = false;
+  var excludedRoutes = <String>[];
+
   Future<void> readFromPreferences() async {
     final jsonMap = await PreferencesKey().readTunSetting();
     if (!EmptyTool.checkMap(jsonMap)) {
@@ -104,6 +109,9 @@ class TunSettingState {
     tunJson.perAppVPNMode = perAppVPNMode.name;
     tunJson.allowAppList = allowAppList.toList();
     tunJson.disallowAppList = disallowAppList.toList();
+
+    tunJson.includeAllNetworks = includeAllNetworks ? true : null;
+    tunJson.excludedRoutes = excludedRoutes.isEmpty ? null : excludedRoutes.toList();
 
     return tunJson;
   }

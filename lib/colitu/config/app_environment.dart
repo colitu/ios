@@ -18,9 +18,15 @@ abstract final class AppEnvironment {
   /// Customer account: plans, renewals and devices are managed there, not in
   /// the app.
   static const accountUrl = 'https://app.colitu.com';
+
+  /// Two-step sign-in is set up here only (the apps answer the challenge).
+  static const securitySettingsUrl = 'https://colitu.com/account/security';
+
+  /// Connection details for other apps and devices (web only for now).
+  static const manualConfigUrl = 'https://colitu.com/account/manual-config';
   static const supportEmail = 'support@colitu.com';
 
   /// Public source code (GPL-3.0).
   static const sourceCodeUrl = 'https://github.com/colitu/ios';
-  static const companyName = 'Avenlith';
+  static const companyName = 'COLITU LIMITED';
 }

@@ -596,12 +596,14 @@ class ColituLinkButton extends StatelessWidget {
               Icon(icon, size: 16, color: color),
               const SizedBox(width: 6),
             ],
-            Text(
-              label,
-              style: ColituText.small.copyWith(
-                color: color,
-                fontWeight: FontWeight.w600,
-                fontSize: 13.5,
+            Flexible(
+              child: Text(
+                label,
+                style: ColituText.small.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13.5,
+                ),
               ),
             ),
           ],
@@ -766,11 +768,14 @@ class ColituStatusChip extends StatelessWidget {
         children: [
           ColituPulseDot(color: color, pulsing: pulsing),
           const SizedBox(width: 8),
-          Text(
-            text,
-            style: ColituText.small.copyWith(
-              color: ColituColors.text,
-              fontWeight: FontWeight.w600,
+          // Flexible: a long label (Russian) wraps instead of overflowing.
+          Flexible(
+            child: Text(
+              text,
+              style: ColituText.small.copyWith(
+                color: ColituColors.text,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],

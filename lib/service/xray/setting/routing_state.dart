@@ -75,7 +75,29 @@ class RoutingState {
     if (customRules.isNotEmpty) {
       rules.addAll(customRules);
     }
-    routing.rules = rules.map((e) => e.xrayJson).toList();
+    var json = rules.map((e) => e.xrayJson).toList();
+    if (ColituRuBypass.privacyMode) json = _withoutRussianDirect(json);
+    routing.rules = json;
     return routing;
+  }
+
+  /// Privacy mode: Russian matchers leave every direct rule, including rules
+  /// that came from a stored routing setting.
+  static List<XrayRoutingRule> _withoutRussianDirect(
+    List<XrayRoutingRule> rules,
+  ) {
+    final kept = <XrayRoutingRule>[];
+    for (final rule in rules) {
+      if (rule.outboundTag != RoutingOutboundTag.direct.name) {
+        kept.add(rule);
+        continue;
+      }
+      final lists = ColituRuBypass.withoutRussian(rule.domain, rule.ip);
+      if (lists == null) continue;
+      rule.domain = (lists.domain?.isEmpty ?? true) ? null : lists.domain;
+      rule.ip = (lists.ip?.isEmpty ?? true) ? null : lists.ip;
+      kept.add(rule);
+    }
+    return kept;
   }
 }

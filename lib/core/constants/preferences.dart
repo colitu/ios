@@ -324,4 +324,63 @@ class PreferencesKey {
   Future<void> saveColituAdBlock(bool value) async {
     await _prefs.setBool(_colituAdBlock, value);
   }
+
+  static const _colituPrivacyMode = "colituPrivacyMode";
+
+  /// Privacy mode: Russian addresses go through the tunnel too, instead of
+  /// leaving it directly on a server outside Russia. Off by default.
+  Future<bool> readColituPrivacyMode() async {
+    return await _prefs.getBool(_colituPrivacyMode) ?? false;
+  }
+
+  Future<void> saveColituPrivacyMode(bool value) async {
+    await _prefs.setBool(_colituPrivacyMode, value);
+  }
+
+  static const _colituRuDirectNoticeShown = "colituRuDirectNoticeShown";
+
+  /// Whether the one-time "Russian sites go outside the VPN" notice was shown.
+  Future<bool> readColituRuDirectNoticeShown() async {
+    return await _prefs.getBool(_colituRuDirectNoticeShown) ?? false;
+  }
+
+  Future<void> saveColituRuDirectNoticeShown(bool value) async {
+    await _prefs.setBool(_colituRuDirectNoticeShown, value);
+  }
+
+  static const _colituStrictKillSwitch = "colituStrictKillSwitch";
+
+  /// Strict kill switch (iOS includeAllNetworks): no traffic leaves the
+  /// device outside the tunnel, not even while it reconnects. Off by
+  /// default because iOS then also blocks captive-portal sign-in pages and
+  /// can hold App Store updates of Colitu while the tunnel is down.
+  Future<bool> readColituStrictKillSwitch() async {
+    return await _prefs.getBool(_colituStrictKillSwitch) ?? false;
+  }
+
+  Future<void> saveColituStrictKillSwitch(bool value) async {
+    await _prefs.setBool(_colituStrictKillSwitch, value);
+  }
+
+  static const _colituSplitTunnel = "colituSplitTunnel";
+
+  /// Split tunneling as JSON {"mode", "domains", "ips"}; null when never set.
+  Future<String?> readColituSplitTunnel() async {
+    return _prefs.getString(_colituSplitTunnel);
+  }
+
+  Future<void> saveColituSplitTunnel(String value) async {
+    await _prefs.setString(_colituSplitTunnel, value);
+  }
+
+  static const _colituTrialBannerDismissed = "colituTrialBannerDismissed";
+
+  /// Day ("2026-10-06") the trial-end banner was last dismissed.
+  Future<String?> readColituTrialBannerDismissed() async {
+    return _prefs.getString(_colituTrialBannerDismissed);
+  }
+
+  Future<void> saveColituTrialBannerDismissed(String value) async {
+    await _prefs.setString(_colituTrialBannerDismissed, value);
+  }
 }

@@ -91,6 +91,13 @@ class AppSession {
     return refreshAccount();
   }
 
+  /// Second sign-in step after [login] threw [MfaRequiredException].
+  Future<ColituAppState> loginMfa(MfaChallenge challenge, String code) async {
+    final response = await _authService.loginMfa(challenge, code);
+    currentUser = response.user;
+    return refreshAccount();
+  }
+
   Future<ColituAppState> register(RegisterRequest request) async {
     final response = await _authService.register(request);
     currentUser = response.user;

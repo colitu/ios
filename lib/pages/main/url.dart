@@ -3,6 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'package:colitu_vpn/colitu/config/feature_flags.dart';
 import 'package:colitu_vpn/pages/colitu/auth/page.dart';
 import 'package:colitu_vpn/pages/colitu/gate/page.dart';
+import 'package:colitu_vpn/pages/colitu/mfa/page.dart';
+import 'package:colitu_vpn/colitu/services/auth_service.dart';
 import 'package:colitu_vpn/pages/colitu/onboarding/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
 import 'package:colitu_vpn/pages/colitu/verify/page.dart';
@@ -108,6 +110,7 @@ abstract final class RouterPath {
   static const colituAuth = "/auth";
   static const colituOnboarding = "/onboarding";
   static const colituVerify = "/verify";
+  static const colituMfa = "/mfa";
   static const colituSubscription = "/subscription";
   static const colituAccount = "/account";
   static const home = "/home";
@@ -196,6 +199,14 @@ abstract final class RouterPath {
       GoRoute(
         path: RouterPath.colituVerify,
         builder: (_, state) => ColituVerifyPage(codeJustSent: state.extra == true),
+      ),
+      GoRoute(
+        path: RouterPath.colituMfa,
+        // Without a challenge (a restored route) there is nothing to answer.
+        redirect: (_, state) =>
+            state.extra is MfaChallenge ? null : RouterPath.colituAuth,
+        builder: (_, state) =>
+            ColituMfaPage(challenge: state.extra! as MfaChallenge),
       ),
       GoRoute(
         path: RouterPath.colituOnboarding,

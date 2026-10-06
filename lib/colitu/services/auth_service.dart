@@ -50,7 +50,40 @@ class LinkRequest {
   static String shown(String code) => code.length == 8 ? '${code.substring(0, 4)}-${code.substring(4)}' : code;
 }
 
+/// Sign-in passed the password and now needs the second step: a code from
+/// the authenticator app or a recovery code. Two-step sign-in is set up on
+/// the website; the app only answers the challenge.
+class MfaChallenge {
+  const MfaChallenge({
+    required this.token,
+    required this.email,
+    required this.expiresAt,
+  });
+
+  final String token;
+  final String email;
+
+  /// When the panel stops accepting [token] (`mfa_expires_in`).
+  final DateTime expiresAt;
+
+  bool get expired => !DateTime.now().isBefore(expiresAt);
+}
+
+/// Thrown by [AuthService.login] when the account uses two-step sign-in.
+class MfaRequiredException implements Exception {
+  const MfaRequiredException(this.challenge);
+
+  final MfaChallenge challenge;
+
+  @override
+  String toString() => 'MfaRequiredException';
+}
+
 class AuthService {
+  /// Tells the panel this build can answer a two-step challenge; without it
+  /// the panel answers `MFA_REQUIRED_UPDATE_APP` for such accounts.
+  static const featureHeaders = {'X-Colitu-Features': 'mfa'};
+
   AuthService({APIClient? client, SecureTokenStore? tokenStore})
     : _client = client ?? APIClient(),
       _tokenStore = tokenStore ?? SecureTokenStore();
@@ -61,13 +94,49 @@ class AuthService {
   bool _deviceRegistrationComplete = false;
 
   Future<AuthResponse> login(LoginRequest request) async {
-    final response = await _client.post(
-      APIEndpoint.authLogin,
-      (json) => AuthTokenResponse.fromJson(json as Map<String, dynamic>),
-      data: request.toJson(),
-      authenticated: false,
-    );
+    final AuthTokenResponse response;
+    try {
+      response = await _client.post(
+        APIEndpoint.authLogin,
+        (json) => AuthTokenResponse.fromJson(json as Map<String, dynamic>),
+        data: request.toJson(),
+        authenticated: false,
+        headers: featureHeaders,
+      );
+    } on APIException catch (error) {
+      final challenge = mfaChallengeOf(error, request.email);
+      if (challenge != null) throw MfaRequiredException(challenge);
+      rethrow;
+    }
     return _completeNativeSession(response, request.email, sendCode: true);
+  }
+
+  /// The second sign-in step. [code] is the six-digit code or a recovery
+  /// code; the answer is the same as a normal sign-in.
+  Future<AuthResponse> loginMfa(MfaChallenge challenge, String code) async {
+    final response = await _client.post(
+      APIEndpoint.authLoginMfa,
+      (json) => AuthTokenResponse.fromJson(json as Map<String, dynamic>),
+      data: {'mfa_token': challenge.token, 'code': code},
+      authenticated: false,
+      headers: featureHeaders,
+    );
+    return _completeNativeSession(response, challenge.email, sendCode: true);
+  }
+
+  /// The challenge in a `403 MFA_REQUIRED` answer, or null for any other
+  /// error (also when the token is missing).
+  static MfaChallenge? mfaChallengeOf(APIException error, String email) {
+    if (error.code != APIErrorCode.mfaRequired) return null;
+    final token = error.details?['mfa_token'];
+    if (token is! String || token.isEmpty) return null;
+    final seconds = error.details?['mfa_expires_in'];
+    final ttl = seconds is num && seconds > 0 ? seconds.toInt() : 300;
+    return MfaChallenge(
+      token: token,
+      email: email.trim(),
+      expiresAt: DateTime.now().add(Duration(seconds: ttl)),
+    );
   }
 
   Future<AuthResponse> register(RegisterRequest request) async {
@@ -103,6 +172,7 @@ class AuthService {
       (json) => AuthTokenResponse.fromJson(json as Map<String, dynamic>),
       data: {'email': email.trim(), 'code': code, 'password': password},
       authenticated: false,
+      headers: featureHeaders,
     );
     return _completeNativeSession(response, email.trim(), sendCode: true);
   }

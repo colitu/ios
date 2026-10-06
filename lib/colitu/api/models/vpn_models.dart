@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 
 class VPNServer {
@@ -31,6 +32,14 @@ class VPNServer {
   /// Use-case categories from the panel: streaming, gaming, privacy, speed,
   /// torrent, ai (the panel adds streaming/ai when the service checks pass).
   final List<String> categories;
+
+  /// A multihop (double VPN) route: [id] is the route id, [entry] the first
+  /// hop and [exit] the node the traffic leaves from. [country]/[city] are
+  /// the exit's; [host]/[port] probe the entry only.
+  final bool isMultihop;
+  final String? routeSlug;
+  final RouteEndpoint? entry;
+  final RouteEndpoint? exit;
 
   /// Chip and label order: what users look for most comes first.
   static const categoryOrder = ['ai', 'streaming', 'gaming', 'speed', 'privacy', 'torrent'];
@@ -84,6 +93,10 @@ class VPNServer {
     this.port,
     this.services = const [],
     this.categories = const [],
+    this.isMultihop = false,
+    this.routeSlug,
+    this.entry,
+    this.exit,
   });
 
   bool get isAvailable => available;
@@ -193,6 +206,10 @@ class VPNServer {
         ? _bool(json['available'] ?? json['isAvailable'])
         : _availableFromStatus(json['status']);
     final locked = _bool(json['locked'] ?? json['isLocked']);
+    final routeEntry = RouteEndpoint.tryParse(json['entry']);
+    final routeExit = RouteEndpoint.tryParse(json['exit']);
+    final multihop =
+        json['multihop'] != false && routeEntry != null && routeExit != null;
     final premium =
         _bool(json['isPremium'] ?? json['premium']) ||
         requiredPlan == 'premium' ||
@@ -206,9 +223,11 @@ class VPNServer {
       displayName: _nullableString(json['displayName'] ?? json['display_name']),
       country: country,
       city: _nullableString(json['city'] ?? json['region']),
-      flagCode: _nullableString(
-        json['flagCode'] ?? json['flag_code'] ?? countryCode,
-      ),
+      flagCode: multihop && routeExit.country != null
+          ? routeExit.country
+          : _nullableString(
+              json['flagCode'] ?? json['flag_code'] ?? countryCode,
+            ),
       ping: (json['ping'] as num?)?.toInt(),
       status:
           '${json['status'] ?? (json['available'] == false ? 'OFFLINE' : 'AVAILABLE')}',
@@ -244,7 +263,23 @@ class VPNServer {
                 value,
             ]
           : const [],
+      isMultihop: multihop,
+      routeSlug: multihop ? _nullableString(json['route_slug']) : null,
+      entry: multihop ? routeEntry : null,
+      exit: multihop ? routeExit : null,
     );
+  }
+
+  /// The `multihop` array of `GET /servers` (or `servers` of
+  /// `GET /multihop/servers`): routes with an id and both ends. An older
+  /// panel sends none.
+  static List<VPNServer> parseMultihop(Object? list) {
+    if (list is! List) return const [];
+    return [
+      for (final item in list)
+        if (item is Map<String, dynamic> && '${item['id'] ?? ''}'.isNotEmpty)
+          VPNServer.fromJson(item),
+    ].where((server) => server.isMultihop).toList();
   }
 
   String? _cityCountryTitle() {
@@ -365,6 +400,11 @@ class VPNConfig {
   final String? rawConfig;
   final DateTime? expiresAt;
 
+  /// The envelope's `server` is a multihop route: the ends of the route.
+  final bool isMultihop;
+  final RouteEndpoint? entry;
+  final RouteEndpoint? exit;
+
   const VPNConfig({
     required this.id,
     required this.serverId,
@@ -375,7 +415,36 @@ class VPNConfig {
     this.subscriptionUrl,
     this.rawConfig,
     this.expiresAt,
+    this.isMultihop = false,
+    this.entry,
+    this.exit,
   });
+
+  /// A multihop route and a rotating exit run on VLESS only: the other
+  /// transports cannot be carried through the mesh. This config with just the
+  /// VLESS candidates (itself when all are VLESS), or null when none is left.
+  VPNConfig? onlyVless() {
+    final vless = [
+      for (final c in outboundCandidates)
+        if (ColituRotation.isVless(c.protocolType)) c,
+    ];
+    if (vless.isEmpty) return null;
+    if (vless.length == outboundCandidates.length) return this;
+    return VPNConfig(
+      id: id,
+      serverId: serverId,
+      serverCountry: serverCountry,
+      protocolType: vless.first.protocolType,
+      outboundConfig: vless.first.outboundConfig,
+      outboundCandidates: vless,
+      subscriptionUrl: subscriptionUrl,
+      rawConfig: rawConfig,
+      expiresAt: expiresAt,
+      isMultihop: isMultihop,
+      entry: entry,
+      exit: exit,
+    );
+  }
 
   bool get hasConnectionPayload {
     return _hasText(rawConfig) ||
@@ -413,6 +482,9 @@ class VPNConfig {
         outboundConfig: primary.outboundConfig,
         outboundCandidates: candidates,
         expiresAt: _date(json['expires_at']),
+        isMultihop: _map(json['server'])?['multihop'] == true,
+        entry: RouteEndpoint.tryParse(_map(json['server'])?['entry']),
+        exit: RouteEndpoint.tryParse(_map(json['server'])?['exit']),
       );
     }
     final outbound =
@@ -523,6 +595,10 @@ class VPNStatus {
   final bool maintenanceActive;
   final String? maintenanceMessage;
 
+  /// What happens when the running trial ends; null outside a trial or
+  /// when the panel does not say.
+  final TrialTransition? trial;
+
   const VPNStatus({
     required this.authenticated,
     required this.subscriptionActive,
@@ -534,6 +610,7 @@ class VPNStatus {
     this.updateRequired = false,
     this.maintenanceActive = false,
     this.maintenanceMessage,
+    this.trial,
   });
 
   /// Connecting is refused for a reason other than the plan (app policy or
@@ -568,6 +645,9 @@ class VPNStatus {
             : active
             ? null
             : 'An active entitlement is required.',
+        trial: status == 'trialing' || status == 'trial_active'
+            ? TrialTransition.fromBootstrap(entitlement, source)
+            : null,
       );
     }
     return VPNStatus(
@@ -597,6 +677,137 @@ class VPNStatus {
       message: source['message'] as String?,
     );
   }
+}
+
+/// The end of a trial as the panel describes it (bootstrap entitlement):
+/// when it ends, the plan that follows and how many devices stay active.
+/// Every number shown to the user comes from here.
+class TrialTransition {
+  const TrialTransition({
+    required this.endsAt,
+    this.nextPlan,
+    this.nextDeviceLimit,
+    this.nextMonthlyGb,
+    this.deviceCount,
+  });
+
+  final DateTime endsAt;
+
+  /// Id or name of the plan after the trial ("free").
+  final String? nextPlan;
+  final int? nextDeviceLimit;
+  final int? nextMonthlyGb;
+
+  /// Devices on the account now; null when the panel does not say.
+  final int? deviceCount;
+
+  bool get toFree => (nextPlan ?? '').trim().toLowerCase() == 'free';
+
+  /// More devices than the next plan allows: the others get paused.
+  bool get pausesDevices {
+    final limit = nextDeviceLimit;
+    final count = deviceCount;
+    return limit != null && count != null && count > limit;
+  }
+
+  static TrialTransition? fromBootstrap(
+    Map<String, dynamic> entitlement,
+    Map<String, dynamic> source,
+  ) {
+    final endsAt = _date(
+      entitlement['ends_at'] ??
+          entitlement['trial_ends_at'] ??
+          entitlement['expires_at'] ??
+          source['trial_ends_at'],
+    );
+    if (endsAt == null) return null;
+    final rawNext = entitlement['next_plan'] ?? source['next_plan'];
+    final next = _map(rawNext);
+    final nextPlan = next == null
+        ? _nullableString(rawNext)
+        : _nullableString(next['id'] ?? next['code'] ?? next['name']);
+    int? first(List<Object?> values) {
+      for (final value in values) {
+        final number = _intOrNull(value);
+        if (number != null && number >= 0) return number;
+      }
+      return null;
+    }
+
+    final gb = first([
+      entitlement['next_monthly_gb'],
+      entitlement['next_traffic_gb'],
+      next?['monthly_gb'],
+      next?['traffic_gb'],
+    ]);
+    final bytes = first([
+      entitlement['next_traffic_limit_bytes'],
+      entitlement['next_monthly_traffic_bytes'],
+      next?['traffic_limit_bytes'],
+      next?['monthly_traffic_bytes'],
+    ]);
+    final devices = source['devices'];
+    // Contract: entitlement.devices = {active, suspended, registered, limit}.
+    final counts = _map(entitlement['devices']);
+    return TrialTransition(
+      endsAt: endsAt,
+      nextPlan: nextPlan,
+      nextDeviceLimit: first([
+        entitlement['next_device_limit'],
+        source['next_device_limit'],
+        next?['device_limit'],
+      ]),
+      nextMonthlyGb: gb ?? (bytes == null ? null : _gigabytes(bytes)),
+      deviceCount: first([
+        counts?['registered'],
+        counts?['active'],
+        entitlement['device_count'],
+        entitlement['devices_count'],
+        entitlement['active_device_count'],
+        source['device_count'],
+        source['devices_count'],
+        if (devices is List) devices.length,
+      ]),
+    );
+  }
+
+  /// 10 GiB and 10 GB both read "10".
+  static int _gigabytes(int bytes) =>
+      bytes % (1 << 30) == 0 ? bytes >> 30 : (bytes / 1e9).round();
+}
+
+/// This device is paused: the plan allows fewer devices than are active
+/// (`403 DEVICE_OVER_LIMIT` from the configuration or bootstrap).
+class DevicePause {
+  const DevicePause({required this.deviceLimit, this.activeDevices = const []});
+
+  final int deviceLimit;
+  final List<PausedPeer> activeDevices;
+
+  factory DevicePause.fromDetails(Map<String, dynamic>? details) {
+    final list = details?['active_devices'];
+    return DevicePause(
+      deviceLimit: _intOrNull(details?['device_limit']) ?? 1,
+      activeDevices: [
+        if (list is List)
+          for (final item in list.whereType<Map<String, dynamic>>())
+            PausedPeer(
+              id: _string(item['id']),
+              name: _string(item['name']),
+              lastSeenAt: _date(item['last_seen_at']),
+            ),
+      ],
+    );
+  }
+}
+
+/// A device that is active while this one is paused.
+class PausedPeer {
+  const PausedPeer({required this.id, required this.name, this.lastSeenAt});
+
+  final String id;
+  final String name;
+  final DateTime? lastSeenAt;
 }
 
 class VPNStatsSnapshot {

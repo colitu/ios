@@ -77,6 +77,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     private var systemPacketReaderStarted = false
     private let traffic = TrafficCounter()
     private var trafficReportTask: Task<Void, Never>?
+    /// IPv6 is off: IPv6 packets from iOS are dropped instead of being
+    /// passed to tun2socks. Set in buildSettings before packets flow.
+    private var dropIPv6 = true
 
 
     /// iOS kills a packet-tunnel extension that grows past roughly 50 MB,
@@ -226,21 +229,39 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             ]
         }
 
+        // IPv6 is always routed into the tunnel (::/0). With IPv6 off it is
+        // dropped there (forwardPacketsFromSystem) instead of leaving through
+        // the physical interface around the tunnel.
+        let ipv6Enabled = request.tun?.enableIPv6 == true
+        dropIPv6 = !ipv6Enabled
+        let ipv6 = NEIPv6Settings(addresses: ["FC00::0001"], networkPrefixLengths: [7])
+        ipv6.includedRoutes = [NEIPv6Route.default()]
+
+        // Split tunneling: addresses that leave the tunnel at the routing
+        // table. With includeAllNetworks iOS does not honour excluded routes
+        // reliably, so they are only installed without it; the core's direct
+        // rules send the same addresses outside the tunnel in both cases.
+        if request.tun?.includeAllNetworks != true {
+            let split = Self.splitExcludedRoutes(request.tun?.excludedRoutes ?? [])
+            if !split.ipv4.isEmpty {
+                ipv4.excludedRoutes = (ipv4.excludedRoutes ?? []) + split.ipv4
+            }
+            if !split.ipv6.isEmpty {
+                ipv6.excludedRoutes = split.ipv6
+            }
+        }
+
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: routedRemoteAddress)
         settings.ipv4Settings = ipv4
+        settings.ipv6Settings = ipv6
         settings.mtu = TunMtu
         var servers: [String] = []
         if let tun = request.tun {
             if let tunDnsIPv4 = tun.tunDnsIPv4 {
                 servers.append(tunDnsIPv4)
             }
-            if let enableIPv6 = tun.enableIPv6, enableIPv6 {
-                let ipv6 = NEIPv6Settings(addresses: ["FC00::0001"], networkPrefixLengths: [7])
-                ipv6.includedRoutes = [NEIPv6Route.default()]
-                settings.ipv6Settings = ipv6
-                if let tunDnsIPv6 = tun.tunDnsIPv6 {
-                    servers.append(tunDnsIPv6)
-                }
+            if ipv6Enabled, let tunDnsIPv6 = tun.tunDnsIPv6 {
+                servers.append(tunDnsIPv6)
             }
 
             if let enableDot = tun.enableDot, enableDot {
@@ -257,6 +278,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             }
         }
         return settings
+    }
+
+    /// Parses the split-tunneling CIDRs from the start request. The app
+    /// validates and normalises them (network address, IPv4 /8-/32, IPv6
+    /// /16-/128); anything that does not parse here is skipped.
+    static func splitExcludedRoutes(_ cidrs: [String]) -> (ipv4: [NEIPv4Route], ipv6: [NEIPv6Route]) {
+        var ipv4: [NEIPv4Route] = []
+        var ipv6: [NEIPv6Route] = []
+        for raw in cidrs.prefix(256) {
+            let parts = raw.trimmingCharacters(in: .whitespaces)
+                .split(separator: "/", maxSplits: 1)
+                .map(String.init)
+            guard let address = parts.first, !address.isEmpty else { continue }
+            if address.contains(":") {
+                var parsed = in6_addr()
+                guard inet_pton(AF_INET6, address, &parsed) == 1 else { continue }
+                let prefix = parts.count == 2 ? Int(parts[1]) : 128
+                guard let prefix, (1 ... 128).contains(prefix) else { continue }
+                ipv6.append(NEIPv6Route(destinationAddress: address, networkPrefixLength: NSNumber(value: prefix)))
+            } else {
+                var parsed = in_addr()
+                guard inet_pton(AF_INET, address, &parsed) == 1 else { continue }
+                let prefix = parts.count == 2 ? Int(parts[1]) : 32
+                guard let prefix, (1 ... 32).contains(prefix) else { continue }
+                let mask = UInt32.max << UInt32(32 - prefix)
+                let subnetMask = [24, 16, 8, 0].map { String((mask >> UInt32($0)) & 0xFF) }.joined(separator: ".")
+                ipv4.append(NEIPv4Route(destinationAddress: address, subnetMask: subnetMask))
+            }
+        }
+        return (ipv4, ipv6)
     }
 
     private func isIPv4Address(_ value: String) -> Bool {
@@ -1063,7 +1114,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                 return
             }
             var total = 0
+            let dropIPv6 = self.dropIPv6
             send: for (packet, proto) in zip(packets, protocols) {
+                // IPv6 off: routed into the tunnel only so it cannot leak.
+                if dropIPv6 && proto.uint32Value == UInt32(AF_INET6) { continue }
                 if Self.isQuicPacket(packet, family: proto.uint32Value) { continue }
                 switch Self.sendPacket(fd: fd, packet: packet, family: proto.uint32Value) {
                 case .sent:

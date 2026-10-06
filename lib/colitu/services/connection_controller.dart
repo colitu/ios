@@ -5,8 +5,12 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:colitu_vpn/colitu/api/api_error.dart';
+import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
+import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
+import 'package:colitu_vpn/colitu/services/user_service.dart';
 import 'package:colitu_vpn/colitu/services/support_service.dart';
+import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
@@ -43,11 +47,14 @@ class ColituConnectionController extends ChangeNotifier
     ColituVPNService? vpnService,
     ColituVPNConfigAdapter? adapter,
     SecureTokenStore? tokenStore,
+    UserService? userService,
   }) : _vpnService = vpnService ?? ColituVPNService(),
        _adapter = adapter ?? ColituVPNConfigAdapter(),
-       _tokenStore = tokenStore ?? SecureTokenStore();
+       _tokenStore = tokenStore ?? SecureTokenStore(),
+       _userService = userService;
 
   final ColituVPNService _vpnService;
+  final UserService? _userService;
   final ColituVPNConfigAdapter _adapter;
   final SecureTokenStore _tokenStore;
 
@@ -105,9 +112,30 @@ class ColituConnectionController extends ChangeNotifier
   VPNServer? suggestedServer;
   int connectedSeconds = 0;
   List<VPNServer> servers = const [];
+
+  /// Multihop (double VPN) routes; empty on an older panel. Never part of
+  /// the automatic "best server" pick.
+  List<VPNServer> multihopServers = const [];
   VPNServer? selectedServer;
   VPNServer? connectedServer;
   VPNStatus? panelStatus;
+
+  /// The account's rotating-exit-IP preference; null until known (or when the
+  /// panel is too old to have one).
+  RotationPreference? rotation;
+
+  /// Where the rotation of the connected node is, while it is on.
+  RotationStatus? rotationStatus;
+  String? _rotationNode;
+  var _rotationPollAt = DateTime.fromMillisecondsSinceEpoch(0);
+  var _lastRotationPoll = DateTime.fromMillisecondsSinceEpoch(0);
+  var _rotationPolling = false;
+  var _rotationEpoch = 0;
+  var _foreground = true;
+
+  /// Node id the tunnel is on (the panel's answer, which may differ from the
+  /// list entry the user picked).
+  String? _connectedNodeId;
 
   /// Panel transport in use ("hysteria2", "vless-reality", …).
   String? transport;
@@ -138,6 +166,34 @@ class ColituConnectionController extends ChangeNotifier
   var autoConnect = true;
   var adBlock = false;
 
+  /// Privacy mode: Russian addresses go through the tunnel too.
+  var privacyMode = false;
+
+  /// Strict kill switch (iOS includeAllNetworks); off by default.
+  var strictKillSwitch = false;
+
+  /// Split tunneling (sites and addresses inside or outside the VPN).
+  SplitTunnelSettings splitTunnel = SplitTunnelSettings.off;
+  Timer? _splitRestart;
+
+  /// Set while the panel says this device is over the plan's device limit
+  /// (`DEVICE_OVER_LIMIT`): the home tab shows the paused page and nothing
+  /// connects, by hand, automatically or on demand.
+  DevicePause? paused;
+  DateTime? _pauseStoppedAt;
+  var _pauseFromStatus = false;
+
+  /// The trial-end banner was dismissed today.
+  var trialBannerDismissed = false;
+
+  /// Set when the one-time "Russian sites go outside the VPN" notice should
+  /// be shown; the shell shows it and calls [takeRuDirectNotice].
+  var ruDirectNoticePending = false;
+
+  /// Country of the server the tunnel connected to (the panel's answer, or
+  /// the server list's).
+  String? _connectedCountry;
+
   /// Called when the stored session is gone (signed out elsewhere, device
   /// removed); the shell returns to sign-in.
   VoidCallback? onSessionEnded;
@@ -166,6 +222,30 @@ class ColituConnectionController extends ChangeNotifier
 
   String get transportName => colituTransportName(transport);
 
+  /// Russian addresses leave the live tunnel directly (the connected-screen
+  /// chip and the one-time notice).
+  bool get ruDirectActive =>
+      connected &&
+      ColituRuBypass.appliesTo(
+        _connectedCountry ?? connectedServer?.countryCode,
+        privacyMode,
+      );
+
+  /// The live tunnel splits traffic (the home screen chip).
+  bool get splitTunnelActive => connected && splitTunnel.active;
+
+  /// The trial ends within three days and the banner was not dismissed
+  /// today; null otherwise.
+  TrialTransition? get trialBanner {
+    final trial = panelStatus?.trial;
+    if (trial == null || trialBannerDismissed || trial.nextPlan == null) {
+      return null;
+    }
+    final left = trial.endsAt.difference(ColituClock.now());
+    if (left.isNegative || left > const Duration(days: 3)) return null;
+    return trial;
+  }
+
   /// Human name for the location shown in the status line.
   String serverLabel(VPNServer? server) {
     if (server == null) return ColituLoc.I['server.auto'];
@@ -179,6 +259,15 @@ class ColituConnectionController extends ChangeNotifier
     alwaysOn = await PreferencesKey().readColituKillSwitchEnabled();
     autoConnect = await PreferencesKey().readColituAutoConnect();
     adBlock = await PreferencesKey().readColituAdBlock();
+    privacyMode = await PreferencesKey().readColituPrivacyMode();
+    ColituRuBypass.privacyMode = privacyMode;
+    strictKillSwitch = await PreferencesKey().readColituStrictKillSwitch();
+    splitTunnel = SplitTunnelSettings.decode(
+      await PreferencesKey().readColituSplitTunnel(),
+    );
+    ColituSplitTunnel.current = splitTunnel;
+    trialBannerDismissed =
+        await PreferencesKey().readColituTrialBannerDismissed() == _today();
     if (_disposed) return;
     _notify();
     await _checkDrops();
@@ -229,11 +318,13 @@ class ColituConnectionController extends ChangeNotifier
     _refreshTimer?.cancel();
     _clockTimer?.cancel();
     _supportTimer?.cancel();
+    _splitRestart?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
       unawaited(_checkDrops());
       unawaited(load(showLoading: false));
@@ -278,11 +369,13 @@ class ColituConnectionController extends ChangeNotifier
         await _enforcePanelStatus(panel);
       }
       final fresh = await _readServers();
-      if (fresh.isNotEmpty) {
-        servers = fresh;
+      if (fresh.servers.isNotEmpty) {
+        servers = fresh.servers;
+        multihopServers = fresh.multihop;
         unawaited(measurePings());
       }
       await _restoreSelection();
+      if (!offline) await _loadRotationQuietly();
       _notify();
       return true;
     } catch (e, stack) {
@@ -302,19 +395,91 @@ class ColituConnectionController extends ChangeNotifier
 
   Future<VPNStatus?> _readStatus() async {
     try {
-      return await _vpnService.status().timeout(const Duration(seconds: 15));
+      final fresh = await _vpnService.status().timeout(
+        const Duration(seconds: 15),
+      );
+      // The account answers again (a device was removed, the plan grew):
+      // a pause that came from this check ends with it.
+      if (paused != null && _pauseFromStatus) paused = null;
+      return fresh;
+    } on APIException catch (e) {
+      if (e.code == APIErrorCode.deviceOverLimit) {
+        await _enterPause(DevicePause.fromDetails(e.details), fromStatus: true);
+      }
+      debugPrint('VPN status refresh failed: $e');
+      return null;
     } catch (e) {
       debugPrint('VPN status refresh failed: $e');
       return null;
     }
   }
 
-  Future<List<VPNServer>> _readServers() async {
+  // ── Paused device ─────────────────────────────────────────────────────
+
+  /// The plan allows fewer devices than are active and this one is paused.
+  /// The tunnel is stopped with on-demand switched off and the runtime
+  /// configuration removed, so iOS cannot start it again by itself.
+  Future<void> _enterPause(DevicePause pause, {bool fromStatus = false}) async {
+    final first = paused == null;
+    paused = pause;
+    _pauseFromStatus = fromStatus;
+    if (first) {
+      _connectSerial++;
+      _pauseStoppedAt = DateTime.now();
+      await _resetTunnelState(clearRuntimeConfig: true);
+      status = ColituVpnStatus.disconnected;
+      phase = ColituConnectPhase.idle;
+      connectedServer = null;
+      transport = null;
+      error = null;
+      notice = null;
+    }
+    _notify();
+  }
+
+  /// "Use this device instead": makes this device the active one, then
+  /// reads the account again. Throws when the panel refuses.
+  Future<void> activateThisDevice() async {
+    final id = await _tokenStore.readDeviceId();
+    if (id == null || id.isEmpty) {
+      throw const APIException(APIErrorCode.unknown, 'Device id is missing');
+    }
+    await (_userService ?? UserService()).activateDevice(id);
+    paused = null;
+    _notify();
+    await load(showLoading: false);
+  }
+
+  /// Pull to refresh on the paused page: the configuration answers whether
+  /// this device may connect again (another device was removed, the plan
+  /// changed).
+  Future<void> recheckPause() async {
     try {
-      return await _vpnService.servers().timeout(const Duration(seconds: 15));
+      await _vpnService.config().timeout(_configTimeout);
+      paused = null;
+      _notify();
+    } on APIException catch (e) {
+      if (e.code == APIErrorCode.deviceOverLimit) {
+        await _enterPause(DevicePause.fromDetails(e.details));
+      }
+    } catch (e) {
+      debugPrint('Pause recheck failed: $e');
+    }
+    await load(showLoading: false);
+  }
+
+  Future<ServerCatalog> _readServers() async {
+    try {
+      return await _vpnService.catalog().timeout(const Duration(seconds: 15));
+    } on APIException catch (e) {
+      if (e.code == APIErrorCode.deviceOverLimit) {
+        await _enterPause(DevicePause.fromDetails(e.details), fromStatus: true);
+      }
+      debugPrint('VPN servers refresh failed: $e');
+      return const ServerCatalog([]);
     } catch (e) {
       debugPrint('VPN servers refresh failed: $e');
-      return const [];
+      return const ServerCatalog([]);
     }
   }
 
@@ -324,6 +489,15 @@ class ColituConnectionController extends ChangeNotifier
       autoSelection = true;
       selectedServer = null;
       return;
+    }
+    // A saved multihop route is matched by its id only: the country matching
+    // below would take every route for a node of the same exit country.
+    for (final route in multihopServers) {
+      if (route.identityKeys.contains(savedId)) {
+        autoSelection = false;
+        selectedServer = route;
+        return;
+      }
     }
     final resolution = resolveVPNServerSelection(servers, savedId);
     final restored = resolution.server;
@@ -447,6 +621,7 @@ class ColituConnectionController extends ChangeNotifier
 
   Future<void> connect({bool reconnect = false}) async {
     if (status == ColituVpnStatus.disconnecting || loading) return;
+    if (paused != null) return;
     if (status == ColituVpnStatus.connecting && !reconnect) return;
     final panel = panelStatus;
     if (panel != null && !panel.vpnAccountReady) {
@@ -472,10 +647,34 @@ class ColituConnectionController extends ChangeNotifier
     _resetTraffic();
     _notify();
     try {
-      final config = await _vpnService
-          .config(serverId: server.selectionKey)
-          .timeout(_configTimeout);
+      // Whether the exit rotates decides the transports: learn it before
+      // connecting if it is quickly known.
+      if (rotation == null && !server.isMultihop) {
+        await _loadRotationQuietly(timeout: const Duration(seconds: 3));
+        if (serial != _connectSerial) return;
+      }
+      var config = server.isMultihop
+          ? await _vpnService.routeConfig(server.id).timeout(_configTimeout)
+          : await _vpnService
+                .config(serverId: server.selectionKey)
+                .timeout(_configTimeout);
       if (serial != _connectSerial) return;
+      // A multihop route and a rotating exit run on VLESS only.
+      if (server.isMultihop || config.isMultihop || rotation?.active == true) {
+        final restricted = config.onlyVless();
+        if (restricted == null) {
+          _fail(
+            ColituLoc.I[server.isMultihop
+                ? 'multihop.needsVless'
+                : 'rotation.needsVless'],
+          );
+          return;
+        }
+        config = restricted;
+      }
+      _connectedNodeId = config.isMultihop || server.isMultihop
+          ? null
+          : (config.serverId.isNotEmpty ? config.serverId : server.id);
 
       // Transports that stalled on this network a little earlier are tried
       // last; every transport the server offers is tried once before the
@@ -525,6 +724,7 @@ class ColituConnectionController extends ChangeNotifier
         await _ensureTunnelDown();
         if (serial != _connectSerial) return;
         ColituRuBypass.serverCountry = config.serverCountry ?? server.countryCode;
+        _connectedCountry = ColituRuBypass.serverCountry;
         await engine.VpnService().startVpn(configId).timeout(_engineStartTimeout);
         var started = await _waitForVpnState(configId);
         if (!started) {
@@ -551,6 +751,7 @@ class ColituConnectionController extends ChangeNotifier
         }
         if (ok) {
           connectedServer = server;
+          _resetRotationStatus();
           connectedSeconds = 0;
           verified = true;
           status = ColituVpnStatus.connected;
@@ -558,6 +759,7 @@ class ColituConnectionController extends ChangeNotifier
           notice = null;
           _notify();
           unawaited(_fetchPublicIp(serial));
+          unawaited(_checkRuDirectNotice());
           // Starting the tunnel records a previous unclean exit, if any.
           unawaited(_checkDrops());
           return;
@@ -590,7 +792,17 @@ class ColituConnectionController extends ChangeNotifier
       if (serial != _connectSerial) return;
       debugPrint('Connection failed: $e');
       debugPrint('$stack');
+      if (e is APIException && e.code == APIErrorCode.deviceOverLimit) {
+        await _enterPause(DevicePause.fromDetails(e.details));
+        return;
+      }
       await _resetTunnelState();
+      if (e is APIException && e.backendCode == 'MULTIHOP_ROUTE_NOT_FOUND') {
+        // The route was removed or renamed: learn the current list.
+        _fail(ColituLoc.I['multihop.gone']);
+        unawaited(load(showLoading: false));
+        return;
+      }
       if (e is APIException &&
           (e.code == APIErrorCode.subscriptionInactive ||
               e.code == APIErrorCode.premiumRequired ||
@@ -801,6 +1013,7 @@ class ColituConnectionController extends ChangeNotifier
     if (!autoConnect) return;
     await Future.delayed(const Duration(milliseconds: 400));
     if (_disposed ||
+        paused != null ||
         panelStatus?.vpnAccountReady != true ||
         effectiveServer == null ||
         AppEventBus.instance.state.runningId != DBConstants.defaultId) {
@@ -820,13 +1033,27 @@ class ColituConnectionController extends ChangeNotifier
     final state = AppEventBus.instance.state;
     final running =
         state.runningId != DBConstants.defaultId && engine.VpnService().vpnRunning;
+    if (running && paused != null) {
+      // Started by iOS (on demand) while paused: stop it again, at most
+      // every ten seconds; the stop also switches on-demand off.
+      final last = _pauseStoppedAt;
+      if (last == null ||
+          DateTime.now().difference(last) > const Duration(seconds: 10)) {
+        _pauseStoppedAt = DateTime.now();
+        unawaited(_resetTunnelState(clearRuntimeConfig: true));
+      }
+      return;
+    }
     if (running) {
       if (!_wasTunnelRunning && status == ColituVpnStatus.disconnected) {
         // The tunnel was already up (app relaunch, on-demand reconnect).
         connectedServer ??= effectiveServer;
+        // A restart for a changed setting rewrites the configuration with it.
+        ColituRuBypass.serverCountry ??= connectedServer?.countryCode;
         status = ColituVpnStatus.connected;
         phase = ColituConnectPhase.idle;
         error = null;
+        unawaited(_checkRuDirectNotice());
       }
       _wasTunnelRunning = true;
       final started = await PreferencesKey().readVpnStartTimestamp();
@@ -834,6 +1061,7 @@ class ColituConnectionController extends ChangeNotifier
       connectedSeconds = seconds.clamp(0, 1 << 31);
       await _sampleTraffic();
       _checkConnectDeadline(running: true);
+      _pollRotationIfDue();
       _notify();
       return;
     }
@@ -991,6 +1219,80 @@ class ColituConnectionController extends ChangeNotifier
     if (connected) unawaited(engine.VpnService().restartCurrentVpn());
   }
 
+  /// Privacy mode adds or removes the Russian direct rule; a live tunnel is
+  /// restarted so the new setting applies.
+  Future<void> setPrivacyMode(bool value) async {
+    if (privacyMode == value) return;
+    privacyMode = value;
+    ColituRuBypass.privacyMode = value;
+    await PreferencesKey().saveColituPrivacyMode(value);
+    _notify();
+    if (connected) unawaited(engine.VpnService().restartCurrentVpn());
+  }
+
+  /// Strict kill switch: written into the VPN profile on the next start; a
+  /// live tunnel is restarted so it applies now.
+  Future<void> setStrictKillSwitch(bool value) async {
+    if (strictKillSwitch == value) return;
+    strictKillSwitch = value;
+    await PreferencesKey().saveColituStrictKillSwitch(value);
+    _notify();
+    if (connected) unawaited(engine.VpnService().restartCurrentVpn());
+  }
+
+  /// Saves the split-tunneling setting. A live tunnel is restarted (once,
+  /// after a short pause, so adding several sites in a row restarts it once)
+  /// when the change affects the configuration.
+  Future<void> setSplitTunnel(SplitTunnelSettings value) async {
+    if (splitTunnel == value) return;
+    final before = splitTunnel;
+    splitTunnel = value;
+    ColituSplitTunnel.current = value;
+    await PreferencesKey().saveColituSplitTunnel(value.encode());
+    _notify();
+    if (!before.active && !value.active) return;
+    _splitRestart?.cancel();
+    _splitRestart = Timer(const Duration(milliseconds: 1200), () {
+      if (connected && !_disposed) {
+        unawaited(engine.VpnService().restartCurrentVpn());
+      }
+    });
+  }
+
+  /// Hides the trial-end banner until tomorrow.
+  Future<void> dismissTrialBanner() async {
+    trialBannerDismissed = true;
+    _notify();
+    await PreferencesKey().saveColituTrialBannerDismissed(_today());
+  }
+
+  static String _today() {
+    final now = ColituClock.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${now.year}-${two(now.month)}-${two(now.day)}';
+  }
+
+  /// Flags the one-time notice when the connection that just came up sends
+  /// Russian addresses outside the tunnel. With privacy mode on or a server
+  /// in Russia nothing is recorded, so the notice comes the first time the
+  /// rule really applies.
+  Future<void> _checkRuDirectNotice() async {
+    if (!ruDirectActive || ruDirectNoticePending) return;
+    if (await PreferencesKey().readColituRuDirectNoticeShown()) return;
+    if (_disposed || !ruDirectActive) return;
+    ruDirectNoticePending = true;
+    _notify();
+  }
+
+  /// The shell shows the notice now: it is recorded as shown, whatever the
+  /// user picks.
+  bool takeRuDirectNotice() {
+    if (!ruDirectNoticePending) return false;
+    ruDirectNoticePending = false;
+    unawaited(PreferencesKey().saveColituRuDirectNoticeShown(true));
+    return true;
+  }
+
   void clearError() {
     error = null;
     _notify();
@@ -1083,6 +1385,136 @@ class ColituConnectionController extends ChangeNotifier
     return '$title. $cause$restored';
   }
 
+  // ── Rotating exit IP ──────────────────────────────────────────────────
+
+  /// Reads the preference; an older panel has none and it stays unknown.
+  Future<void> _loadRotationQuietly({Duration? timeout}) async {
+    try {
+      final pending = _vpnService.rotation();
+      final preference = await (timeout == null ? pending : pending.timeout(timeout));
+      if (_disposed) return;
+      final changed =
+          rotation?.intervalSeconds != preference.intervalSeconds;
+      rotation = preference;
+      if (changed) _resetRotationStatus();
+      _notify();
+    } catch (e) {
+      debugPrint('Rotation preference not loaded: $e');
+    }
+  }
+
+  /// Reads the preference again (the rotation page opens, pull to refresh).
+  Future<void> refreshRotation() => _loadRotationQuietly();
+
+  /// Saves the interval and countries. Throws [APIException] (400
+  /// `INVALID_PREFERENCE` for a country set the panel cannot serve). A
+  /// tunnel on a non-VLESS transport is restarted so it can rotate.
+  Future<void> saveRotation(int intervalSeconds, List<String> countries) async {
+    final saved = await _vpnService.saveRotation(intervalSeconds, countries);
+    rotation = saved;
+    _resetRotationStatus();
+    _notify();
+    if (saved.active &&
+        connected &&
+        connectedServer?.isMultihop != true &&
+        !ColituRotation.isVless(transport)) {
+      await connect(reconnect: true);
+    }
+  }
+
+  /// The node whose rotation the home screen follows: the connected one,
+  /// while rotation is on and the tunnel is not a multihop route.
+  String? get _rotationNodeId {
+    if (!connected || rotation?.active != true) return null;
+    if (connectedServer?.isMultihop == true) return null;
+    final id = _connectedNodeId ?? connectedServer?.id;
+    return id == null || id.isEmpty ? null : id;
+  }
+
+  /// The home screen's "Exit: Berlin · changes in 4:07"; null unless the
+  /// panel reports the rotation as running for the connected node.
+  ({String exit, Duration? left})? get rotationLine {
+    final status = rotationStatus;
+    final exit = status?.currentExit;
+    if (_rotationNodeId == null || status == null || !status.active || exit == null) {
+      return null;
+    }
+    final country = exit.country;
+    final label = country != null && exit.label.toUpperCase() != country
+        ? '${exit.label} ($country)'
+        : exit.label;
+    final next = status.nextChangeAt;
+    return (
+      exit: label,
+      left: next?.difference(ColituClock.now().toUtc()),
+    );
+  }
+
+  /// Asks for the status at the announced change time, never more often than
+  /// every 60 seconds and only while the app is on screen.
+  void _pollRotationIfDue() {
+    final node = _rotationNodeId;
+    if (node == null) {
+      if (rotationStatus != null || _rotationNode != null) {
+        _rotationNode = null;
+        _resetRotationStatus();
+      }
+      return;
+    }
+    if (_rotationNode != node) {
+      // Another node: what the last one reported does not apply.
+      _rotationNode = node;
+      _resetRotationStatus();
+    }
+    if (!_foreground || _rotationPolling) return;
+    final now = DateTime.now();
+    if (now.isBefore(_rotationPollAt) ||
+        now.difference(_lastRotationPoll) <
+            const Duration(seconds: ColituRotation.minStatusPollSeconds)) {
+      return;
+    }
+    unawaited(_pollRotation(node));
+  }
+
+  Future<void> _pollRotation(String node) async {
+    _rotationPolling = true;
+    _lastRotationPoll = DateTime.now();
+    final epoch = _rotationEpoch;
+    try {
+      final status = await _vpnService
+          .rotationStatus(node)
+          .timeout(const Duration(seconds: 15));
+      if (epoch != _rotationEpoch || _disposed) return;
+      rotationStatus = status;
+      final now = DateTime.now();
+      // Inactive (the node is not in the rotation mesh, too few exits): look
+      // again later.
+      _rotationPollAt = now.add(
+        status.active
+            ? ColituRotation.nextPollDelay(status.nextChangeAt, now.toUtc())
+            : const Duration(minutes: 5),
+      );
+      _notify();
+    } catch (e) {
+      if (epoch == _rotationEpoch) {
+        _rotationPollAt = DateTime.now().add(
+          const Duration(seconds: ColituRotation.minStatusPollSeconds),
+        );
+      }
+      debugPrint('Rotation status failed: $e');
+    } finally {
+      _rotationPolling = false;
+    }
+  }
+
+  /// The shown status is stale (new node, new preference): poll again as soon
+  /// as allowed.
+  void _resetRotationStatus() {
+    rotationStatus = null;
+    _rotationPollAt = DateTime.fromMillisecondsSinceEpoch(0);
+    _rotationEpoch++;
+  }
+
   // ── Sign out ──────────────────────────────────────────────────────────
 
   Future<void> signOut() async {
@@ -1098,6 +1530,9 @@ class ColituConnectionController extends ChangeNotifier
     transport = null;
     autoSelection = true;
     servers = const [];
+    multihopServers = const [];
+    rotation = null;
+    _resetRotationStatus();
     panelStatus = null;
     _notify();
   }
@@ -1107,6 +1542,8 @@ class ColituConnectionController extends ChangeNotifier
     final country = code.length == 2
         ? ColituLoc.I.countryName(code)
         : server.displayCountry;
+    // A route is named by its two ends ("Helsinki → Frankfurt").
+    if (server.isMultihop) return server.name;
     final city = server.city?.trim();
     if (city != null && city.isNotEmpty && city.toLowerCase() != country.toLowerCase()) {
       return '$country · $city';
@@ -1143,7 +1580,7 @@ class ColituConnectionController extends ChangeNotifier
       } catch (_) {}
     }
     if (status != ColituVpnStatus.disconnected || _pingRun != null) return;
-    final list = servers;
+    final list = [...servers, ...multihopServers];
     final run = () async {
       final measured = await ServerLatency.measureAll(list);
       if (measured.isEmpty || status != ColituVpnStatus.disconnected) return;

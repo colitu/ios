@@ -8,6 +8,7 @@ import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
+import 'package:colitu_vpn/colitu/services/auth_service.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/colitu/theme/particles.dart';
 import 'package:colitu_vpn/pages/colitu/auth/reset_panel.dart';
@@ -105,6 +106,9 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
       }
       if (!mounted) return;
       context.go(RouterPath.home);
+    } on MfaRequiredException catch (required) {
+      // Two-step sign-in: the code page finishes the sign-in.
+      if (mounted) context.go(RouterPath.colituMfa, extra: required.challenge);
     } on APIException catch (error) {
       if (!mounted) return;
       if (error.code == APIErrorCode.emailNotVerified) {

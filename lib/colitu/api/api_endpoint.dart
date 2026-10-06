@@ -6,6 +6,7 @@ abstract final class APIEndpoint {
   static Uri get baseUrl => AppEnvironment.apiBaseUrl;
 
   static const authLogin = '/auth/login';
+  static const authLoginMfa = '/auth/login/mfa';
   static const authRegister = '/auth/register';
   static const authRefresh = '/auth/refresh';
   static const authLogout = '/auth/logout';
@@ -26,6 +27,7 @@ abstract final class APIEndpoint {
 
   static const userDevices = '/devices';
   static const registerDevice = '/devices/register';
+  static String activateDevice(String id) => '/devices/${Uri.encodeComponent(id)}/activate';
   static const clientBootstrap = '/client/bootstrap';
   static const userPreferences = '/me/preferences';
   static const configRefresh = '/config/refresh';
@@ -33,6 +35,16 @@ abstract final class APIEndpoint {
 
   static const vpnServers = '/servers';
   static const vpnConfig = '/config';
+
+  /// Multihop (double VPN) routes; a route's config has the same envelope as
+  /// `/config`.
+  static const multihopServers = '/multihop/servers';
+  static String multihopRouteConfig(String id) =>
+      '/multihop/routes/${Uri.encodeComponent(id)}/config';
+
+  /// Rotating exit IP: the preference and the status of the connected node.
+  static const rotation = '/me/rotation';
+  static const rotationStatus = '/me/rotation/status';
   static const vpnStatus = '/client/bootstrap';
   static const vpnStats = '/me/usage';
 

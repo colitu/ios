@@ -8,6 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:colitu_vpn/core/tools/platform.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
+import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
+import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/core/constants/preferences.dart';
 import 'package:colitu_vpn/core/db/database/constants.dart';
 import 'package:colitu_vpn/core/db/database/database.dart';
@@ -365,6 +367,8 @@ final class VpnService {
     final tunSettingState = TunSettingState();
     await tunSettingState.readFromPreferences();
     await _applyConnectionProtectionPreference(tunSettingState);
+    // Both configuration writers consult it (the Russian direct rule).
+    ColituRuBypass.privacyMode = await PreferencesKey().readColituPrivacyMode();
     var configPath = "";
     switch (coreConfigType) {
       case CoreConfigType.outbound:
@@ -410,6 +414,18 @@ final class VpnService {
     tunSettingState.onDemandEnabled = enabled;
     tunSettingState.disconnectOnSleep = false;
     tunSettingState.onDemandRules.clear();
+    // Strict kill switch and split tunneling are written into the tunnel
+    // profile on every start, so existing installs pick them up too.
+    tunSettingState.includeAllNetworks =
+        AppPlatform.isIOS && await PreferencesKey().readColituStrictKillSwitch();
+    final split = SplitTunnelSettings.decode(
+      await PreferencesKey().readColituSplitTunnel(),
+    );
+    ColituSplitTunnel.current = split;
+    tunSettingState.excludedRoutes = ColituSplitTunnel.excludedRoutes(
+      split,
+      keepInside: [tunSettingState.tunDnsIPv4, tunSettingState.tunDnsIPv6],
+    );
   }
 
   /// Starts fresh logs for a new session. The stability and core error logs

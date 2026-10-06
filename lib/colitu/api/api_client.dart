@@ -86,6 +86,7 @@ class APIClient {
     JsonDecoder<T> decoder, {
     Object? data,
     bool authenticated = true,
+    Map<String, dynamic>? headers,
   }) async {
     return _request(
       path,
@@ -93,6 +94,7 @@ class APIClient {
       method: 'POST',
       data: data,
       authenticated: authenticated,
+      requestHeaders: headers,
     );
   }
 

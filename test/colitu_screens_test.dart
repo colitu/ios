@@ -1,13 +1,21 @@
 import 'dart:io';
 
+import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
+import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/services/auth_service.dart';
+import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/services/user_service.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/auth/page.dart';
+import 'package:colitu_vpn/pages/colitu/mfa/page.dart';
+import 'package:colitu_vpn/pages/colitu/paused/page.dart';
+import 'package:colitu_vpn/pages/colitu/rotation/page.dart';
+import 'package:colitu_vpn/pages/colitu/split_tunnel/page.dart';
 import 'package:colitu_vpn/pages/colitu/onboarding/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/account_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/home_tab.dart';
@@ -53,7 +61,11 @@ void main() {
   setUp(() async {
     await ColituLoc.I.setLanguage('tr', persist: false);
     AppSession.instance.currentUser = _user;
+    // Plan dates and day counts would otherwise change every day.
+    ColituClock.fix(() => _now);
   });
+
+  tearDown(() => ColituClock.fix(null));
 
   Future<void> pumpPage(WidgetTester tester, Widget page) async {
     tester.view.physicalSize = const Size(1179, 2556);
@@ -242,8 +254,97 @@ void main() {
     c.dispose();
   });
 
+  testWidgets('home: trial ends, split tunneling on', skip: !comparePlatform, (
+    tester,
+  ) async {
+    final c = _controller()
+      ..status = ColituVpnStatus.connected
+      ..connectedServer = _servers.first
+      ..verified = true
+      ..transport = 'vless-reality'
+      ..splitTunnel = const SplitTunnelSettings(
+        mode: SplitTunnelMode.bypass,
+        domains: ['sberbank.ru', 'gosuslugi.ru'],
+        ips: ['203.0.113.0/24'],
+      )
+      ..panelStatus = VPNStatus(
+        authenticated: true,
+        subscriptionActive: true,
+        tier: 'trial',
+        premiumAllowed: true,
+        vpnAccountReady: true,
+        trial: TrialTransition(
+          endsAt: _now.add(const Duration(days: 2, hours: 5)),
+          nextPlan: 'free',
+          nextDeviceLimit: 1,
+          nextMonthlyGb: 10,
+          deviceCount: 2,
+        ),
+      );
+    await shoot(
+      tester,
+      _shell(
+        HomeTab(
+          controller: c,
+          onToggle: () async {},
+          onChangeLocation: () {},
+          onOpenPlan: () {},
+        ),
+      ),
+      'home_trial',
+    );
+    c.dispose();
+  });
+
+  testWidgets('paused device', skip: !comparePlatform, (tester) async {
+    final c = _controller()
+      ..paused = DevicePause(
+        deviceLimit: 1,
+        activeDevices: [
+          PausedPeer(
+            id: 'd2',
+            name: 'DESKTOP-ALICA',
+            lastSeenAt: _now.subtract(const Duration(hours: 3)),
+          ),
+        ],
+      );
+    await shoot(tester, _shell(ColituPausedView(controller: c)), 'paused');
+    c.dispose();
+  });
+
+  testWidgets('split tunneling', skip: !comparePlatform, (tester) async {
+    final c = _controller()
+      ..splitTunnel = const SplitTunnelSettings(
+        mode: SplitTunnelMode.bypass,
+        domains: ['sberbank.ru', 'gosuslugi.ru'],
+        ips: ['203.0.113.0/24'],
+      );
+    await shoot(tester, ColituSplitTunnelPage(controller: c), 'split_tunnel');
+    c.dispose();
+  });
+
+  testWidgets('two-step sign-in', skip: !comparePlatform, (tester) async {
+    await shoot(
+      tester,
+      ColituMfaPage(
+        challenge: MfaChallenge(
+          token: 't',
+          email: 'ayse@example.com',
+          expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+        ),
+      ),
+      'mfa',
+    );
+  });
+
+  testWidgets('rotating IP', skip: !comparePlatform, (tester) async {
+    final c = _controller()..rotation = _rotation;
+    await shoot(tester, ColituRotationPage(controller: c), 'rotation');
+    c.dispose();
+  });
+
   testWidgets('account', skip: !comparePlatform, (tester) async {
-    final c = _controller();
+    final c = _controller()..rotation = _rotation;
     await shoot(
       tester,
       _shell(
@@ -306,13 +407,33 @@ ColituConnectionController _controller() {
     );
 }
 
+/// Rotation every 10 minutes over the default set; Russia is listed unchecked.
+final _rotation = RotationPreference.fromJson({
+  'interval_seconds': 600,
+  'countries': <String>[],
+  'intervals': [300, 600, 1800],
+  'available_countries': [
+    {'country': 'DE', 'in_default': true, 'exits': 2},
+    {'country': 'NL', 'in_default': true, 'exits': 1},
+    {'country': 'FI', 'in_default': true, 'exits': 1},
+    {'country': 'SE', 'in_default': true, 'exits': 1},
+    {'country': 'RU', 'in_default': false, 'exits': 1},
+  ],
+  'protocols': ['vless-reality', 'vless-xhttp'],
+  'changes_exit_country': true,
+});
+
+/// The goldens' "now" (a fixed day, so plan dates never drift).
+final _now = DateTime(2026, 10, 6, 12);
+
 final _user = ColituUser(
   id: 'u1',
   email: 'ayse@example.com',
   deviceLimit: 3,
   subscriptionStatus: 'ACTIVE',
   plan: 'Colitu VPN · 12 ay',
-  expiresAt: DateTime.now().add(const Duration(days: 212)),
+  // A minute short of 212 days: "211 days left", as the goldens show.
+  expiresAt: _now.add(const Duration(days: 212, minutes: -1)),
   premiumAllowed: true,
 );
 

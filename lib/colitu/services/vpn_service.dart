@@ -4,16 +4,29 @@ import 'dart:io';
 import 'package:colitu_vpn/colitu/api/api_client.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
+import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
 import 'package:path/path.dart' as p;
+
+/// The server list answer: the nodes and the multihop routes.
+class ServerCatalog {
+  const ServerCatalog(this.servers, [this.multihop = const []]);
+
+  final List<VPNServer> servers;
+  final List<VPNServer> multihop;
+}
 
 class ColituVPNService {
   ColituVPNService({APIClient? client}) : _client = client ?? APIClient();
 
   final APIClient _client;
 
-  Future<List<VPNServer>> servers() {
+  Future<List<VPNServer>> servers() async => (await catalog()).servers;
+
+  /// The server list with the multihop (double VPN) routes of the same answer
+  /// (`multihop`; an older panel sends none).
+  Future<ServerCatalog> catalog() {
     return _client.get(APIEndpoint.vpnServers, (json) {
       final list = _listFromJson(json, 'servers');
       final servers = list
@@ -26,8 +39,63 @@ class ColituVPNService {
           'Server is temporarily unavailable. Please try again later.',
         );
       }
-      return servers;
+      return ServerCatalog(
+        servers,
+        VPNServer.parseMultihop(json is Map ? json['multihop'] : null),
+      );
     }, queryParameters: _freshQuery());
+  }
+
+  /// `GET /multihop/servers`: the routes only.
+  Future<List<VPNServer>> multihopServers() {
+    return _client.get(
+      APIEndpoint.multihopServers,
+      (json) => VPNServer.parseMultihop(json is Map ? json['servers'] : json),
+      queryParameters: _freshQuery(),
+    );
+  }
+
+  /// The route's own config: the envelope of `/config`, VLESS candidates only.
+  /// 404 `MULTIHOP_ROUTE_NOT_FOUND` when the route was removed.
+  Future<VPNConfig> routeConfig(String routeId) {
+    return _client.get(
+      APIEndpoint.multihopRouteConfig(routeId),
+      _decodeConfig,
+      queryParameters: _freshQuery(),
+    );
+  }
+
+  Future<RotationPreference> rotation() {
+    return _client.get(
+      APIEndpoint.rotation,
+      (json) => RotationPreference.fromJson(json is Map ? json['rotation'] : null),
+      queryParameters: _freshQuery(),
+    );
+  }
+
+  /// Saves the preference; 400 `INVALID_PREFERENCE` for a country set the
+  /// panel cannot serve.
+  Future<RotationPreference> saveRotation(
+    int intervalSeconds,
+    List<String> countries,
+  ) {
+    return _client.putRenewing(
+      APIEndpoint.rotation,
+      (json) => RotationPreference.fromJson(json is Map ? json['rotation'] : null),
+      data: () => {
+        'interval_seconds': intervalSeconds,
+        'countries': ColituRotation.normalizeCountries(countries),
+      },
+    );
+  }
+
+  /// Where the rotation is for the node this device is connected to.
+  Future<RotationStatus> rotationStatus(String nodeId) {
+    return _client.get(
+      APIEndpoint.rotationStatus,
+      (json) => RotationStatus.fromJson(json is Map ? json['status'] : null),
+      queryParameters: {'node_id': nodeId, ..._freshQuery()},
+    );
   }
 
   Future<VPNServer> bestServer() async {
@@ -60,29 +128,35 @@ class ColituVPNService {
         data: () => const {'current_revision': 0},
       );
     }
-    return _client.get(APIEndpoint.vpnConfig, (json) {
-      final root = json is Map<String, dynamic> ? json : <String, dynamic>{};
-      final map =
-          _mapFromJson(root, 'config') ??
-          _mapFromJson(root, 'vpnConfig') ??
-          _mapFromJson(root, 'data') ??
-          _mapFromJson(root, 'result') ??
-          root;
-      if (map.isEmpty) {
-        throw const APIException(
-          APIErrorCode.configMissing,
-          'VPN configuration is missing or unsupported',
-        );
-      }
-      final config = VPNConfig.fromJson(map);
-      if (!config.hasConnectionPayload) {
-        throw const APIException(
-          APIErrorCode.configMissing,
-          'VPN configuration is missing or unsupported',
-        );
-      }
-      return config;
-    }, queryParameters: {..._freshQuery()});
+    return _client.get(
+      APIEndpoint.vpnConfig,
+      _decodeConfig,
+      queryParameters: {..._freshQuery()},
+    );
+  }
+
+  static VPNConfig _decodeConfig(Object? json) {
+    final root = json is Map<String, dynamic> ? json : <String, dynamic>{};
+    final map =
+        _mapFromJson(root, 'config') ??
+        _mapFromJson(root, 'vpnConfig') ??
+        _mapFromJson(root, 'data') ??
+        _mapFromJson(root, 'result') ??
+        root;
+    if (map.isEmpty) {
+      throw const APIException(
+        APIErrorCode.configMissing,
+        'VPN configuration is missing or unsupported',
+      );
+    }
+    final config = VPNConfig.fromJson(map);
+    if (!config.hasConnectionPayload) {
+      throw const APIException(
+        APIErrorCode.configMissing,
+        'VPN configuration is missing or unsupported',
+      );
+    }
+    return config;
   }
 
   Future<VPNStatus> status() {

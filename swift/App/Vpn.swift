@@ -275,6 +275,9 @@ class VPNManager {
         vpn.protocolConfiguration?.disconnectOnSleep = false
         if clearRuntimeRequest {
             clearProviderRuntimeRequest(vpn)
+            // A stopped tunnel must not keep capturing traffic; the next
+            // start writes the user's setting again.
+            applyTrafficCapture(vpn, strict: false)
         }
         do {
             try await vpn.saveToPreferences()
@@ -421,6 +424,9 @@ class VPNManager {
             // is guaranteed to reach the packet-tunnel extension.
             vpn.protocolConfiguration = conf
         }
+        // Written on every save, not only when the profile is first created,
+        // so existing installs pick the setting up on their next connect.
+        applyTrafficCapture(vpn, strict: tun.includeAllNetworks == true)
         if let onDemandEnabled = tun.onDemandEnabled, onDemandEnabled {
             if let rules = tun.onDemandRules, !rules.isEmpty {
                 let onDemandRules = convertRules(rules)
@@ -449,7 +455,25 @@ class VPNManager {
         try await vpn.loadFromPreferences()
     }
 
-    
+    /// Strict kill switch. With `includeAllNetworks` iOS sends all traffic
+    /// into the tunnel (also connections opened before it came up) and
+    /// drops it while the tunnel is connecting or reconnecting, instead of
+    /// letting it out unprotected; the extension's own sockets stay exempt.
+    /// `enforceRoutes` keeps more specific routes of the local network from
+    /// overriding the tunnel's. Local networks (printers, AirDrop, AirPlay,
+    /// CarPlay over Wi-Fi) stay reachable outside the tunnel either way.
+    private func applyTrafficCapture(_ vpn: NETunnelProviderManager, strict: Bool) {
+        guard let conf = vpn.protocolConfiguration else { return }
+        if #available(iOS 14.2, macOS 11.0, *) {
+            conf.includeAllNetworks = strict
+            conf.excludeLocalNetworks = true
+            conf.enforceRoutes = strict
+        }
+        vpn.protocolConfiguration = conf
+        YGLog("VPN traffic capture includeAllNetworks=\(strict) enforceRoutes=\(strict) excludeLocalNetworks=true")
+    }
+
+
     private func convertRules(_ rules: [OnDemandRule]) -> [NEOnDemandRule] {
         var onDemandRules: [NEOnDemandRule] = []
         for rule in rules {

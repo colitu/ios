@@ -30,6 +30,16 @@ class UserService {
     });
   }
 
+  /// Makes this (paused) device the active one; the panel pauses another
+  /// device of the account instead.
+  Future<void> activateDevice(String id) {
+    return _client.postRenewing(
+      APIEndpoint.activateDevice(id),
+      (_) {},
+      data: () => const <String, dynamic>{},
+    );
+  }
+
   Future<void> disconnectDevice(String id) {
     return _client.delete(
       '${APIEndpoint.userDevices}/${Uri.encodeComponent(id)}',

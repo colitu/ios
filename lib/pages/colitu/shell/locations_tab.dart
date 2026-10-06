@@ -86,6 +86,20 @@ class _LocationsTabState extends State<LocationsTab> {
     return items;
   }
 
+  /// Multihop routes matching the search; they belong to no category.
+  List<VPNServer> _routes() {
+    if (_filter != 'all') return const [];
+    final query = _fold(_search.text.trim());
+    return [
+      for (final route in widget.controller.multihopServers)
+        if (query.isEmpty ||
+            _fold(
+              '${route.name} ${route.entry?.label ?? ''} ${route.exit?.label ?? ''} ${route.entry?.country ?? ''} ${route.exit?.country ?? ''}',
+            ).contains(query))
+          route,
+    ];
+  }
+
   /// The panel's recommended locations; without any, the three fastest.
   List<VPNServer> _recommended(List<VPNServer> items) {
     final c = widget.controller;
@@ -130,6 +144,7 @@ class _LocationsTabState extends State<LocationsTab> {
     final items = _filtered();
     final recommended = _recommended(items);
     final rest = items.where((s) => !recommended.contains(s)).toList();
+    final routes = _routes();
     var index = 0;
     Widget card(VPNServer server) {
       final delay = Duration(milliseconds: 40 * (index++).clamp(0, 8));
@@ -288,6 +303,18 @@ class _LocationsTabState extends State<LocationsTab> {
             const SizedBox(height: 12),
           ],
           for (final server in rest) card(server),
+        ],
+        if (routes.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _SectionHeader(title: loc['multihop.section']),
+          const SizedBox(height: 4),
+          Text(loc['multihop.sectionHint'], style: ColituText.small),
+          const SizedBox(height: 12),
+          for (final route in routes)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _RouteCard(controller: c, route: route),
+            ),
         ],
       ],
     );
@@ -547,6 +574,84 @@ class _ServerCard extends StatelessWidget {
       out.add(_Tag(ColituLoc.I['cat.$category'], category: category));
     }
     return out;
+  }
+}
+
+/// A multihop route: the entry and exit flags, the route name and the ping
+/// to the entry (an estimate: the exit adds a hop).
+class _RouteCard extends StatelessWidget {
+  const _RouteCard({required this.controller, required this.route});
+
+  final ColituConnectionController controller;
+  final VPNServer route;
+
+  @override
+  Widget build(BuildContext context) {
+    final loc = ColituLoc.I;
+    final c = controller;
+    final selected =
+        !c.autoSelection && c.selectedServer?.selectionKey == route.selectionKey;
+    final connected =
+        c.connected && c.connectedServer?.selectionKey == route.selectionKey;
+    final selectable = route.isSelectable;
+    return Opacity(
+      opacity: selectable ? 1 : 0.5,
+      child: ColituTile(
+        key: ValueKey('route.${route.id}'),
+        active: selected || connected,
+        onTap: selectable ? () => c.selectServer(route) : null,
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        child: Row(
+          children: [
+            ColituFlag(route.entry?.country ?? '', size: 36),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Icon(
+                CupertinoIcons.arrow_right,
+                size: 14,
+                color: ColituColors.muted,
+              ),
+            ),
+            ColituFlag(route.exit?.country ?? '', size: 36),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          route.name,
+                          style: ColituText.label.copyWith(fontSize: 16),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (connected) ...[
+                        const SizedBox(width: 8),
+                        _Pill(loc['server.connected'], accent: true),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    selectable ? loc['multihop.ping'] : loc['server.offline'],
+                    style: ColituText.small,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (selectable) _Ping(c.pingOf(route)),
+            const SizedBox(width: 10),
+            _GoButton(active: selected || connected),
+          ],
+        ),
+      ),
+    );
   }
 }
 

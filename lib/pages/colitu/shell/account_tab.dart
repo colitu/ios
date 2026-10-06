@@ -10,6 +10,8 @@ import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
+import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
+import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/services/email_support_service.dart';
 import 'package:colitu_vpn/colitu/services/tunnel_diagnostics_service.dart';
@@ -17,12 +19,15 @@ import 'package:colitu_vpn/colitu/services/user_service.dart';
 import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/link/page.dart';
+import 'package:colitu_vpn/pages/colitu/rotation/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/home_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
+import 'package:colitu_vpn/pages/colitu/split_tunnel/page.dart';
 import 'package:colitu_vpn/pages/main/url.dart';
 
 /// Account and settings in one place: profile, features (always-on,
-/// auto-connect, DNS), connection (protocol, language), devices, general.
+/// auto-connect, ad blocking, privacy mode, strict kill switch, split
+/// tunneling, DNS), connection (protocol, language), devices, general.
 class AccountTab extends StatefulWidget {
   const AccountTab({
     super.key,
@@ -32,6 +37,7 @@ class AccountTab extends StatefulWidget {
     this.onSessionEnded,
     this.onOpenSupport,
     this.users,
+    this.focusPrivacy = false,
   });
 
   final ColituConnectionController controller;
@@ -43,6 +49,9 @@ class AccountTab extends StatefulWidget {
   final VoidCallback? onOpenSupport;
   final UserService? users;
 
+  /// Scrolls to the privacy mode switch once the tab is on screen.
+  final bool focusPrivacy;
+
   @override
   State<AccountTab> createState() => _AccountTabState();
 }
@@ -53,10 +62,27 @@ class _AccountTabState extends State<AccountTab> {
   var _loadingDevices = true;
   String? _error;
   String _version = '';
+  final _privacyKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
+    if (widget.focusPrivacy) {
+      // Opened from the home screen's "Russian sites outside VPN" chip.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final target = _privacyKey.currentContext;
+        if (target != null && target.mounted) {
+          unawaited(
+            Scrollable.ensureVisible(
+              target,
+              alignment: 0.3,
+              duration: const Duration(milliseconds: 350),
+              curve: Curves.easeOutCubic,
+            ),
+          );
+        }
+      });
+    }
     unawaited(_loadDevices());
     PackageInfo.fromPlatform().then((info) {
       if (mounted) {
@@ -122,6 +148,20 @@ class _AccountTabState extends State<AccountTab> {
       if (!mounted) return;
       showColituToast(context, loc['account.removed']);
       await _loadDevices();
+    } catch (e) {
+      if (mounted) showColituToast(context, colituErrorMessage(e), error: true);
+    }
+  }
+
+  /// Makes a paused device the active one (the panel pauses another one).
+  Future<void> _activate(ColituDevice device) async {
+    try {
+      await _users.activateDevice(device.id);
+      if (!mounted) return;
+      showColituToast(context, ColituLoc.I['paused.activated']);
+      await _loadDevices();
+      // This device may have been the one paused, or the one now paused.
+      await widget.controller.load(showLoading: false);
     } catch (e) {
       if (mounted) showColituToast(context, colituErrorMessage(e), error: true);
     }
@@ -305,6 +345,89 @@ class _AccountTabState extends State<AccountTab> {
         ],
         const SizedBox(height: 8),
         ColituSwitchRow(
+          key: _privacyKey,
+          icon: CupertinoIcons.hand_raised_fill,
+          title: loc['privacy.title'],
+          hint: loc['privacy.hint'],
+          value: c.privacyMode,
+          onChanged: c.setPrivacyMode,
+        ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 8, top: 2),
+            child: ColituLinkButton(
+              label: loc['privacy.scope'],
+              icon: CupertinoIcons.arrow_up_right_square,
+              onPressed: () => launchUrl(
+                Uri.parse(ColituRuBypass.docsUrl(loc.language)),
+                mode: LaunchMode.externalApplication,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        ColituSwitchRow(
+          key: const ValueKey('strictKillSwitch'),
+          icon: CupertinoIcons.nosign,
+          title: loc['killSwitch.title'],
+          hint: loc['killSwitch.hint'],
+          value: c.strictKillSwitch,
+          onChanged: c.setStrictKillSwitch,
+        ),
+        const SizedBox(height: 8),
+        ColituActionRow(
+          key: const ValueKey('splitTunnelRow'),
+          icon: CupertinoIcons.arrow_branch,
+          title: loc['split.title'],
+          hint: _splitHint(c.splitTunnel),
+          onTap: () => ColituSplitTunnelPage.open(context, c),
+        ),
+        const SizedBox(height: 8),
+        // An older panel has no rotation: the row stays hidden.
+        if (c.rotation != null) ...[
+          ColituActionRow(
+            key: const ValueKey('rotationRow'),
+            icon: CupertinoIcons.arrow_2_circlepath,
+            title: loc['rotation.title'],
+            hint: ColituRotationPage.summary(c.rotation),
+            onTap: () => ColituRotationPage.open(context, c),
+          ),
+          const SizedBox(height: 8),
+        ],
+        ColituActionRow(
+          key: const ValueKey('mfaSetupRow'),
+          icon: CupertinoIcons.lock_shield,
+          title: loc['mfa.setup'],
+          hint: loc['mfa.setupHint'],
+          trailing: const Icon(
+            CupertinoIcons.arrow_up_right_square,
+            size: 18,
+            color: ColituColors.dim,
+          ),
+          onTap: () => launchUrl(
+            Uri.parse(AppEnvironment.securitySettingsUrl),
+            mode: LaunchMode.externalApplication,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ColituActionRow(
+          key: const ValueKey('manualConfigRow'),
+          icon: CupertinoIcons.doc_text,
+          title: loc['account.manualConfig'],
+          hint: loc['account.manualConfigHint'],
+          trailing: const Icon(
+            CupertinoIcons.arrow_up_right_square,
+            size: 18,
+            color: ColituColors.dim,
+          ),
+          onTap: () => launchUrl(
+            Uri.parse(AppEnvironment.manualConfigUrl),
+            mode: LaunchMode.externalApplication,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ColituSwitchRow(
           icon: CupertinoIcons.lock_shield_fill,
           title: loc['settings.dns'],
           hint: loc['settings.dnsHint'],
@@ -384,7 +507,11 @@ class _AccountTabState extends State<AccountTab> {
           )
         else
           for (final device in _devices) ...[
-            _DeviceRow(device: device, onRemove: () => _remove(device)),
+            _DeviceRow(
+              device: device,
+              onRemove: () => _remove(device),
+              onActivate: device.paused ? () => _activate(device) : null,
+            ),
             const SizedBox(height: 8),
           ],
         const SizedBox(height: 10),
@@ -485,6 +612,15 @@ class _AccountTabState extends State<AccountTab> {
   }
 }
 
+String _splitHint(SplitTunnelSettings settings) {
+  final loc = ColituLoc.I;
+  if (!settings.active) return loc['split.hint.off'];
+  final count = loc.count('site', settings.count);
+  return settings.mode == SplitTunnelMode.only
+      ? loc.format('split.hint.only', {'count': count})
+      : loc.format('split.hint.bypass', {'count': count});
+}
+
 class _SectionTitle extends StatelessWidget {
   const _SectionTitle(this.text);
 
@@ -500,10 +636,17 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _DeviceRow extends StatelessWidget {
-  const _DeviceRow({required this.device, required this.onRemove});
+  const _DeviceRow({
+    required this.device,
+    required this.onRemove,
+    this.onActivate,
+  });
 
   final ColituDevice device;
   final VoidCallback onRemove;
+
+  /// Set for a paused device ("Paused" pill and an Activate action).
+  final VoidCallback? onActivate;
 
   IconData get _icon => switch ((device.platform ?? '').toLowerCase()) {
     'ios' || 'iphone' || 'ipad' => CupertinoIcons.device_phone_portrait,
@@ -540,6 +683,10 @@ class _DeviceRow extends StatelessWidget {
                       const SizedBox(width: 8),
                       ColituBadge(loc['account.thisDevice']),
                     ],
+                    if (device.paused) ...[
+                      const SizedBox(width: 8),
+                      ColituBadge(loc['paused.pill'], tone: ColituBadgeTone.warning),
+                    ],
                   ],
                 ),
                 if (device.lastActiveAt != null) ...[
@@ -549,6 +696,12 @@ class _DeviceRow extends StatelessWidget {
                     style: ColituText.small,
                   ),
                 ],
+                if (onActivate != null)
+                  ColituLinkButton(
+                    key: ValueKey('activate.${device.id}'),
+                    label: loc['paused.activate'],
+                    onPressed: onActivate,
+                  ),
               ],
             ),
           ),
