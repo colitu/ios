@@ -4,7 +4,17 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
-## 5.5.0 — next TestFlight build
+## 5.5.1
+
+- Locations: servers are grouped by country. A country with several servers
+  shows one row with the number of locations and the best ping; tap it to
+  see its cities. Searching still lists every matching server.
+- A more compact server list: about twice as many servers fit on one screen
+  and long country names are no longer cut off.
+- Servers with YouTube without ads show an "Ad-free YouTube" tag.
+- Albania is shown with its country name.
+
+## 5.5.0
 
 - Split tunneling (Account > Split tunneling): selected sites and IP ranges
   bypass the VPN, or only they use it. iOS lets only MDM-managed VPN

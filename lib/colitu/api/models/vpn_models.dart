@@ -58,6 +58,8 @@ class VPNServer {
 
   /// Display names in the order they are shown on a server row.
   static const serviceNames = {
+    // Not a streaming service: it only says YouTube plays without ads here.
+    'youtube_adfree': 'Ad-free YouTube',
     'chatgpt': 'ChatGPT',
     'gemini': 'Gemini',
     'claude': 'Claude',

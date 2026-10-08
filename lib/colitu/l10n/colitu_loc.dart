@@ -542,6 +542,11 @@ class ColituLoc extends ChangeNotifier {
       'Search country or city',
     ],
     'locations.empty': ['Ничего не найдено', 'Sonuç bulunamadı', 'Nothing found'],
+    'service.youtube_adfree': ['YouTube без рекламы', 'Reklamsız YouTube', 'Ad-free YouTube'],
+    // Country header with several cities (counted noun, see ColituLoc.count)
+    'locationCount.one': ['{n} локация', '{n} konum', '{n} location'],
+    'locationCount.few': ['{n} локации', '{n} konum', '{n} locations'],
+    'locationCount.many': ['{n} локаций', '{n} konum', '{n} locations'],
     'locations.switching': [
       'Переключаемся на {server}…',
       '{server} konumuna geçiliyor…',
@@ -1533,6 +1538,7 @@ class ColituLoc extends ChangeNotifier {
 
   static const _countries = <String, List<String>>{
     'AE': ['ОАЭ', 'BAE', 'United Arab Emirates'],
+    'AL': ['Албания', 'Arnavutluk', 'Albania'],
     'AM': ['Армения', 'Ermenistan', 'Armenia'],
     'AR': ['Аргентина', 'Arjantin', 'Argentina'],
     'AT': ['Австрия', 'Avusturya', 'Austria'],

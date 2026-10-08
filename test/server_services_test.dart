@@ -29,4 +29,13 @@ void main() {
     expect(server.opensAi, isFalse);
     expect(server.opensStreaming, isFalse);
   });
+
+  test('ad-free YouTube is a service tag but not a streaming one', () {
+    final server = VPNServer.fromJson({'id': 'al', 'name': 'Arnavutluk', 'country': 'AL', 'status': 'online', 'services': ['youtube_adfree']});
+    expect(server.services, ['youtube_adfree']);
+    expect(server.opensStreaming, isFalse);
+    expect(server.inCategory('streaming'), isFalse);
+    expect(VPNServer.serviceNames.keys.first, 'youtube_adfree');
+    expect(VPNServer.streamingServices, ['netflix', 'youtube_premium']);
+  });
 }

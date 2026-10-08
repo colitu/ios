@@ -7,6 +7,7 @@ import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
+import 'package:colitu_vpn/colitu/services/server_groups.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
 
@@ -32,6 +33,10 @@ class _LocationsTabState extends State<LocationsTab> {
   final _search = TextEditingController();
   var _filter = 'all';
   var _sort = _Sort.ping;
+
+  /// Countries the user opened or closed by hand (country code -> open).
+  /// Without an entry a country is open when it holds the selected server.
+  final _expanded = <String, bool>{};
 
   @override
   void initState() {
@@ -145,14 +150,41 @@ class _LocationsTabState extends State<LocationsTab> {
     final recommended = _recommended(items);
     final rest = items.where((s) => !recommended.contains(s)).toList();
     final routes = _routes();
+    final searching = _search.text.trim().isNotEmpty;
+    final selectedKey = c.autoSelection ? null : c.selectedServer?.selectionKey;
+    // A search lists the matches flat; otherwise a country with several
+    // servers becomes one expandable group.
+    final groups = groupServersByCountry(rest, flat: searching);
     var index = 0;
     Widget card(VPNServer server) {
       final delay = Duration(milliseconds: 40 * (index++).clamp(0, 8));
       return Padding(
-        padding: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.only(bottom: 8),
         child: ColituReveal(
           delay: delay,
           child: _ServerCard(controller: c, server: server),
+        ),
+      );
+    }
+
+    Widget groupCard(ServerGroup group) {
+      final delay = Duration(milliseconds: 40 * (index++).clamp(0, 8));
+      final open = isGroupExpanded(
+        group,
+        selectedKey: selectedKey,
+        overrides: _expanded,
+      );
+      return Padding(
+        key: ValueKey('group.${group.key}'),
+        padding: const EdgeInsets.only(bottom: 8),
+        child: ColituReveal(
+          delay: delay,
+          child: _CountryGroup(
+            controller: c,
+            group: group,
+            expanded: open,
+            onToggle: () => setState(() => _expanded[group.key] = !open),
+          ),
         ),
       );
     }
@@ -302,7 +334,8 @@ class _LocationsTabState extends State<LocationsTab> {
             _SectionHeader(title: loc['locations.allServers']),
             const SizedBox(height: 12),
           ],
-          for (final server in rest) card(server),
+          for (final group in groups)
+            if (group.isSingle) card(group.servers.first) else groupCard(group),
         ],
         if (routes.isNotEmpty) ...[
           const SizedBox(height: 14),
@@ -486,70 +519,60 @@ class _ServerCard extends StatelessWidget {
       child: ColituTile(
         active: selected || connected,
         onTap: selectable ? () => c.selectServer(server) : null,
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: _rowPadding,
+        child: Row(
           children: [
-            Row(
-              children: [
-                ColituFlag(code, size: 46),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            ColituFlag(code, size: _flagSize),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              country.isEmpty ? server.displayTitle : country,
-                              style: ColituText.label.copyWith(fontSize: 17),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (connected) ...[
-                            const SizedBox(width: 8),
-                            _Pill(loc['server.connected'], accent: true),
-                          ] else if (server.isPremium) ...[
-                            const SizedBox(width: 8),
-                            const ColituBadge('PRO'),
-                          ],
-                        ],
-                      ),
-                      if (city.isNotEmpty &&
-                          city.toLowerCase() != country.toLowerCase()) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          city,
-                          style: ColituText.muted,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                      Flexible(
+                        child: _NameLine(
+                          country.isEmpty ? server.displayTitle : country,
+                          city:
+                              city.isNotEmpty &&
+                                  city.toLowerCase() != country.toLowerCase()
+                              ? city
+                              : null,
                         ),
+                      ),
+                      if (connected) ...[
+                        const SizedBox(width: 6),
+                        _Pill(loc['server.connected'], accent: true),
+                      ] else if (server.isPremium) ...[
+                        const SizedBox(width: 6),
+                        const ColituBadge('PRO'),
                       ],
                     ],
                   ),
-                ),
-                const SizedBox(width: 8),
-                if (selectable)
-                  _Ping(c.pingOf(server))
-                else
-                  Text(loc['server.offline'], style: ColituText.small),
-                const SizedBox(width: 12),
-                _GoButton(active: selected || connected),
-              ],
-            ),
-            if (tags.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.only(left: 58),
-                child: _TagLine(tags),
+                  if (tags.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    _TagLine(tags),
+                  ],
+                ],
               ),
-            ],
+            ),
+            const SizedBox(width: 8),
+            if (selectable)
+              _Ping(c.pingOf(server))
+            else
+              Text(loc['server.offline'], style: ColituText.small),
+            const SizedBox(width: 8),
+            _GoButton(active: selected || connected),
           ],
         ),
       ),
     );
+  }
+
+  /// Localized service name when the strings have one, else the brand name.
+  static String _serviceLabel(String key, String fallback) {
+    final text = ColituLoc.I['service.$key'];
+    return text == 'service.$key' ? fallback : text;
   }
 
   /// Services the panel verified on this node first, then the use cases they
@@ -561,7 +584,7 @@ class _ServerCard extends StatelessWidget {
         _Tag(ColituLoc.I['cat.adblock'], category: 'adblock'),
       for (final entry in VPNServer.serviceNames.entries)
         if (server.services.contains(entry.key))
-          _Tag(entry.value, service: entry.key),
+          _Tag(_serviceLabel(entry.key, entry.value), service: entry.key),
     ];
     final hasAi = server.services.any(VPNServer.requiredAiServices.contains);
     final hasStreaming = server.services.any(
@@ -577,6 +600,224 @@ class _ServerCard extends StatelessWidget {
   }
 }
 
+/// A country with several servers: the header (flag, country, how many
+/// locations, best ping) opens and closes the city rows below it.
+class _CountryGroup extends StatelessWidget {
+  const _CountryGroup({
+    required this.controller,
+    required this.group,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  final ColituConnectionController controller;
+  final ServerGroup group;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final loc = ColituLoc.I;
+    final c = controller;
+    final first = group.servers.first;
+    final code = first.countryCode;
+    final country = code.length == 2
+        ? loc.countryName(code)
+        : first.displayCountry;
+    final selectedKey = c.autoSelection ? null : c.selectedServer?.selectionKey;
+    final connectedKey = c.connected ? c.connectedServer?.selectionKey : null;
+    final hasSelected = group.contains(selectedKey);
+    final hasConnected = group.contains(connectedKey);
+    final anySelectable = group.servers.any((s) => s.isSelectable);
+    return Column(
+      children: [
+        Opacity(
+          opacity: anySelectable ? 1 : 0.5,
+          child: Semantics(
+            button: true,
+            expanded: expanded,
+            child: ColituTile(
+              active: !expanded && (hasSelected || hasConnected),
+              onTap: onToggle,
+              padding: _rowPadding,
+              child: Row(
+                children: [
+                  ColituFlag(code, size: _flagSize),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                country.isEmpty ? first.displayTitle : country,
+                                style: _nameStyle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (!expanded && hasConnected) ...[
+                              const SizedBox(width: 6),
+                              _Pill(loc['server.connected'], accent: true),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          loc.count('locationCount', group.servers.length),
+                          style: _cityStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (anySelectable)
+                    _Ping(group.bestPing(c.pingOf))
+                  else
+                    Text(loc['server.offline'], style: ColituText.small),
+                  const SizedBox(width: 8),
+                  _ExpandButton(expanded: expanded),
+                ],
+              ),
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: expanded
+              ? Column(
+                  children: [
+                    for (final server in group.servers)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6, left: 16),
+                        child: _CityRow(controller: c, server: server),
+                      ),
+                  ],
+                )
+              : const SizedBox(width: double.infinity),
+        ),
+      ],
+    );
+  }
+}
+
+/// One city inside an open country group: city, ping, a checkmark when it is
+/// the chosen one. Tapping selects it just like a single server row.
+class _CityRow extends StatelessWidget {
+  const _CityRow({required this.controller, required this.server});
+
+  final ColituConnectionController controller;
+  final VPNServer server;
+
+  @override
+  Widget build(BuildContext context) {
+    final loc = ColituLoc.I;
+    final c = controller;
+    final selected =
+        !c.autoSelection &&
+        c.selectedServer?.selectionKey == server.selectionKey;
+    final connected =
+        c.connected && c.connectedServer?.selectionKey == server.selectionKey;
+    final active = selected || connected;
+    final selectable = server.isSelectable;
+    final tags = _ServerCard._tags(server);
+    return Opacity(
+      opacity: selectable ? 1 : 0.5,
+      child: ColituTile(
+        key: ValueKey('city.${server.selectionKey}'),
+        active: active,
+        onTap: selectable ? () => c.selectServer(server) : null,
+        padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          serverCityLabel(server),
+                          style: _nameStyle.copyWith(fontSize: 15),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (connected) ...[
+                        const SizedBox(width: 6),
+                        _Pill(loc['server.connected'], accent: true),
+                      ] else if (server.isPremium) ...[
+                        const SizedBox(width: 6),
+                        const ColituBadge('PRO'),
+                      ],
+                    ],
+                  ),
+                  if (tags.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    _TagLine(tags),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (selectable)
+              _Ping(c.pingOf(server))
+            else
+              Text(loc['server.offline'], style: ColituText.small),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: active
+                  ? const Icon(
+                      CupertinoIcons.checkmark_alt,
+                      size: 19,
+                      color: ColituColors.lilac,
+                    )
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Round chevron of a country header; turns down when the group is open.
+class _ExpandButton extends StatelessWidget {
+  const _ExpandButton({required this.expanded});
+
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: _goSize,
+    height: _goSize,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: ColituColors.surface2,
+      border: Border.all(color: ColituColors.lineStrong),
+    ),
+    child: AnimatedRotation(
+      turns: expanded ? 0.25 : 0,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      child: const Icon(
+        CupertinoIcons.chevron_right,
+        size: 14,
+        color: ColituColors.text,
+      ),
+    ),
+  );
+}
+
 /// A multihop route: the entry and exit flags, the route name and the ping
 /// to the entry (an estimate: the exit adds a hop).
 class _RouteCard extends StatelessWidget {
@@ -590,7 +831,8 @@ class _RouteCard extends StatelessWidget {
     final loc = ColituLoc.I;
     final c = controller;
     final selected =
-        !c.autoSelection && c.selectedServer?.selectionKey == route.selectionKey;
+        !c.autoSelection &&
+        c.selectedServer?.selectionKey == route.selectionKey;
     final connected =
         c.connected && c.connectedServer?.selectionKey == route.selectionKey;
     final selectable = route.isSelectable;
@@ -600,10 +842,10 @@ class _RouteCard extends StatelessWidget {
         key: ValueKey('route.${route.id}'),
         active: selected || connected,
         onTap: selectable ? () => c.selectServer(route) : null,
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        padding: _rowPadding,
         child: Row(
           children: [
-            ColituFlag(route.entry?.country ?? '', size: 36),
+            ColituFlag(route.entry?.country ?? '', size: 30),
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 4),
               child: Icon(
@@ -612,7 +854,7 @@ class _RouteCard extends StatelessWidget {
                 color: ColituColors.muted,
               ),
             ),
-            ColituFlag(route.exit?.country ?? '', size: 36),
+            ColituFlag(route.exit?.country ?? '', size: 30),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -623,18 +865,18 @@ class _RouteCard extends StatelessWidget {
                       Flexible(
                         child: Text(
                           route.name,
-                          style: ColituText.label.copyWith(fontSize: 16),
+                          style: _nameStyle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (connected) ...[
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         _Pill(loc['server.connected'], accent: true),
                       ],
                     ],
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 1),
                   Text(
                     selectable ? loc['multihop.ping'] : loc['server.offline'],
                     style: ColituText.small,
@@ -655,6 +897,35 @@ class _RouteCard extends StatelessWidget {
   }
 }
 
+/// Compact row metrics shared by the server rows, country headers and routes.
+const _rowPadding = EdgeInsets.fromLTRB(12, 9, 12, 9);
+const _flagSize = 40.0;
+const _goSize = 30.0;
+final _nameStyle = ColituText.label.copyWith(fontSize: 16);
+final _cityStyle = ColituText.muted.copyWith(fontSize: 13);
+
+/// Country name with the city after it in the smaller secondary style, on one
+/// line; the city is what gets cut off first.
+class _NameLine extends StatelessWidget {
+  const _NameLine(this.name, {this.city});
+
+  final String name;
+  final String? city;
+
+  @override
+  Widget build(BuildContext context) => Text.rich(
+    TextSpan(
+      text: name,
+      style: _nameStyle,
+      children: [
+        if (city != null) TextSpan(text: '  $city', style: _cityStyle),
+      ],
+    ),
+    maxLines: 1,
+    overflow: TextOverflow.ellipsis,
+  );
+}
+
 class _Tag {
   const _Tag(this.label, {this.service, this.category});
 
@@ -665,21 +936,24 @@ class _Tag {
 
 const _tagStyle = TextStyle(
   fontFamily: ColituText.family,
-  fontSize: 12.5,
+  fontSize: 11.5,
   height: 1.2,
   fontWeight: FontWeight.w500,
   color: ColituColors.text,
 );
 const _pillStyle = TextStyle(
   fontFamily: ColituText.family,
-  fontSize: 12,
+  fontSize: 11,
   height: 1.2,
   fontWeight: FontWeight.w600,
   color: ColituColors.muted,
 );
-const _tagIcon = 17.0;
-const _tagIconGap = 5.0;
-const _tagSpacing = 10.0;
+const _tagIcon = 14.0;
+const _tagIconGap = 4.0;
+const _tagSpacing = 8.0;
+
+/// Tags shown on one row before the rest folds into "+N".
+const _maxTags = 2;
 
 /// Slack per tag so rounding never squeezes a label into an ellipsis.
 const _tagSlack = 6.0;
@@ -706,10 +980,10 @@ class _TagLine extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final max = constraints.maxWidth;
-        double pill(int n) => _textWidth('+$n', _pillStyle, scaler) + 20;
+        double pill(int n) => _textWidth('+$n', _pillStyle, scaler) + 18;
         var used = 0.0;
         var count = 0;
-        for (var i = 0; i < tags.length; i++) {
+        for (var i = 0; i < tags.length && i < _maxTags; i++) {
           final width =
               _tagSlack +
               _tagIcon +
@@ -784,7 +1058,7 @@ class _Pill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
     decoration: BoxDecoration(
       color: accent
           ? ColituColors.violet.withValues(alpha: 0.22)
@@ -843,7 +1117,7 @@ class _Ping extends StatelessWidget {
           ),
           if (i < 3) const SizedBox(width: 2),
         ],
-        const SizedBox(width: 8),
+        const SizedBox(width: 6),
         Text(
           value == null ? '—' : '$value ms',
           style: ColituText.small.copyWith(color: ColituColors.muted),
@@ -861,8 +1135,8 @@ class _GoButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedContainer(
     duration: const Duration(milliseconds: 180),
-    width: 40,
-    height: 40,
+    width: _goSize,
+    height: _goSize,
     decoration: BoxDecoration(
       shape: BoxShape.circle,
       gradient: active ? ColituGradients.accent : null,
@@ -873,7 +1147,7 @@ class _GoButton extends StatelessWidget {
     ),
     child: Icon(
       CupertinoIcons.chevron_right,
-      size: 17,
+      size: 14,
       color: active ? ColituColors.onAccent : ColituColors.text,
     ),
   );
@@ -920,6 +1194,7 @@ class ColituServiceMark extends StatelessWidget {
       case 'gemini':
         return CustomPaint(size: Size.square(size), painter: _SparkPainter());
       case 'youtube_premium':
+      case 'youtube_adfree':
         return CustomPaint(size: Size.square(size), painter: _PlayPainter());
       case 'chatgpt':
         return CustomPaint(size: Size.square(size), painter: _KnotPainter());
