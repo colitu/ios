@@ -93,14 +93,25 @@ class ColituStallWatch {
     }
   }
 
-  static bool hasPhysicalNetwork(Iterable<NetworkInterface> interfaces) {
-    for (final interface in interfaces) {
-      final name = interface.name;
+  static bool hasPhysicalNetwork(Iterable<NetworkInterface> interfaces) =>
+      physicalNetworkIn([
+        for (final interface in interfaces)
+          (
+            interface.name,
+            [
+              for (final address in interface.addresses)
+                address.isLoopback || address.isLinkLocal,
+            ],
+          ),
+      ]);
+
+  /// [hasPhysicalNetwork] on plain data: each interface's name and, per
+  /// address, whether it is loopback or link-local. Separate because the
+  /// element type of `NetworkInterface.addresses` differs between Dart SDKs.
+  static bool physicalNetworkIn(Iterable<(String, List<bool>)> interfaces) {
+    for (final (name, local) in interfaces) {
       if (!name.startsWith('en') && !name.startsWith('pdp_ip')) continue;
-      for (final address in interface.addresses) {
-        if (address.isLoopback || address.isLinkLocal) continue;
-        return true;
-      }
+      if (local.any((isLocal) => !isLocal)) return true;
     }
     return false;
   }

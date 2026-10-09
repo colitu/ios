@@ -3,17 +3,13 @@ import 'dart:io';
 import 'package:colitu_vpn/colitu/services/stall_watch.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class _Interface implements NetworkInterface {
-  _Interface(this.name, List<String> addresses)
-    : addresses = addresses.map(InternetAddress.new).toList();
-
-  @override
-  final String name;
-  @override
-  final List<InternetAddress> addresses;
-  @override
-  int get index => 1;
-}
+(String, List<bool>) _interface(String name, List<String> addresses) => (
+  name,
+  [
+    for (final address in addresses.map(InternetAddress.new))
+      address.isLoopback || address.isLinkLocal,
+  ],
+);
 
 void main() {
   final t0 = DateTime(2026, 10, 8, 12);
@@ -95,28 +91,28 @@ void main() {
 
   test('network detection looks at Wi-Fi and cellular only', () {
     expect(
-      ColituStallWatch.hasPhysicalNetwork([
-        _Interface('lo0', ['127.0.0.1']),
-        _Interface('utun3', ['198.18.0.1']),
+      ColituStallWatch.physicalNetworkIn([
+        _interface('lo0', ['127.0.0.1']),
+        _interface('utun3', ['198.18.0.1']),
       ]),
       isFalse,
     );
     expect(
-      ColituStallWatch.hasPhysicalNetwork([
-        _Interface('en0', ['fe80::1']),
+      ColituStallWatch.physicalNetworkIn([
+        _interface('en0', ['fe80::1']),
       ]),
       isFalse,
     );
     expect(
-      ColituStallWatch.hasPhysicalNetwork([
-        _Interface('utun3', ['198.18.0.1']),
-        _Interface('pdp_ip0', ['10.64.12.7']),
+      ColituStallWatch.physicalNetworkIn([
+        _interface('utun3', ['198.18.0.1']),
+        _interface('pdp_ip0', ['10.64.12.7']),
       ]),
       isTrue,
     );
     expect(
-      ColituStallWatch.hasPhysicalNetwork([
-        _Interface('en0', ['192.168.1.20']),
+      ColituStallWatch.physicalNetworkIn([
+        _interface('en0', ['192.168.1.20']),
       ]),
       isTrue,
     );
