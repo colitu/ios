@@ -250,6 +250,14 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
                       error: _emailError,
                       enabled: !_loading,
                     ),
+                    if (register) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        loc['auth.registerHint'],
+                        key: const ValueKey('registerHint'),
+                        style: ColituText.small,
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     ColituField(
                       controller: _password,

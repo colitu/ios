@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
+import 'package:colitu_vpn/colitu/api/endpoint_list.dart';
 import 'package:colitu_vpn/colitu/api/models/auth_models.dart';
 import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
@@ -17,31 +18,31 @@ class APIClient {
   factory APIClient() => _singleton;
 
   APIClient._internal()
-    : _dio = Dio(
-        BaseOptions(
-          baseUrl: APIEndpoint.baseUrl.toString(),
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 20),
-          contentType: Headers.jsonContentType,
-          responseType: ResponseType.json,
-          validateStatus: (status) => status != null,
-          // The API never redirects; a redirect (captive portal, CDN) would
-          // carry the device id to another host and return a page, not JSON.
-          followRedirects: false,
-        ),
-      ),
-      _refreshDio = Dio(
-        BaseOptions(
-          baseUrl: APIEndpoint.baseUrl.toString(),
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 20),
-          contentType: Headers.jsonContentType,
-          responseType: ResponseType.json,
-          validateStatus: (status) => status != null,
-          followRedirects: false,
-        ),
-      ),
+    : _dio = _buildDio(),
+      _refreshDio = _buildDio(),
       _tokenStore = SecureTokenStore();
+
+  /// Both clients start at the preferred base and fail over through
+  /// [ApiFailoverInterceptor] (not when `COLITU_API_BASE_URL` is set).
+  static Dio _buildDio() {
+    final dio = Dio(
+      BaseOptions(
+        baseUrl: APIEndpoint.baseUrl.toString(),
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 20),
+        contentType: Headers.jsonContentType,
+        responseType: ResponseType.json,
+        validateStatus: (status) => status != null,
+        // The API never redirects; a redirect (captive portal, CDN) would
+        // carry the device id to another host and return a page, not JSON.
+        followRedirects: false,
+      ),
+    );
+    if (EndpointManager.instance.enabled) {
+      dio.interceptors.add(ApiFailoverInterceptor(dio, EndpointManager.instance));
+    }
+    return dio;
+  }
 
   @visibleForTesting
   APIClient.testing({

@@ -504,6 +504,16 @@ workflows:
               exit 1
               ;;
           esac
+          # The mirror origins for API failover are kept out of the public
+          # source too: set COLITU_MIRRORS (comma-separated https:// origins)
+          # in the TESTER variable group.
+          case "${COLITU_MIRRORS:-}" in
+            https://*) ;;
+            *)
+              echo "Missing COLITU_MIRRORS in TESTER variable group"
+              exit 1
+              ;;
+          esac
           # Sanity check only: the build itself never talks to the API. Build
           # machines sometimes fail a DNS lookup for a moment, so retry and
           # warn instead of failing the whole build on one bad lookup.
@@ -524,6 +534,7 @@ workflows:
             --build-number "$BUILD_NUMBER" \
             --dart-define="COLITU_API_BASE_URL=${COLITU_API_BASE_URL}" \
             --dart-define="COLITU_ADBLOCK_DOH=${COLITU_ADBLOCK_DOH}" \
+            --dart-define="COLITU_MIRRORS=${COLITU_MIRRORS}" \
             --export-options-plist "$HOME/export_options.plist"
 
     artifacts:

@@ -44,4 +44,22 @@ void main() {
       'Server is temporarily unavailable. Please try again later.',
     );
   });
+
+  test('sign-up guard errors keep their backend code and message', () {
+    for (final (status, code) in [
+      (400, 'DISPOSABLE_EMAIL'),
+      (400, 'PASSWORD_BREACHED'),
+      (429, 'SIGNUP_IP_LIMIT'),
+    ]) {
+      final error = APIException.fromResponse(
+        Response<Object?>(
+          requestOptions: RequestOptions(path: '/auth/register'),
+          statusCode: status,
+          data: {'error': {'code': code, 'message': 'x'}},
+        ),
+      );
+      expect(error.backendCode, code);
+      expect(error.statusCode, status);
+    }
+  });
 }

@@ -279,6 +279,24 @@ class APIException implements Exception {
           'This email cannot be registered.',
           statusCode: statusCode,
         );
+      case 'DISPOSABLE_EMAIL':
+        return APIException(
+          APIErrorCode.unknown,
+          'Temporary e-mail addresses are not accepted.',
+          statusCode: statusCode,
+        );
+      case 'PASSWORD_BREACHED':
+        return APIException(
+          APIErrorCode.unknown,
+          'This password appears in a known data breach.',
+          statusCode: statusCode,
+        );
+      case 'SIGNUP_IP_LIMIT':
+        return APIException(
+          APIErrorCode.rateLimited,
+          'Too many accounts were created from this network recently.',
+          statusCode: statusCode,
+        );
       case 'DEVICE_LIMIT_REACHED':
       case 'DEVICE_LIMIT_EXCEEDED':
         return APIException(

@@ -929,6 +929,36 @@ class ColituLoc extends ChangeNotifier {
       'Bu e-posta ile kayıt yapılamıyor; hesap zaten olabilir.',
       'This email can’t be registered. It may already have an account.',
     ],
+    'err.disposableEmail': [
+      'Временные адреса электронной почты не принимаются. Используйте постоянный адрес (например, Gmail, Outlook, Яндекс).',
+      'Geçici e-posta adresleri kabul edilmiyor. Lütfen kalıcı bir e-posta adresi kullanın (ör. Gmail, Outlook, Yandex).',
+      'Temporary e-mail addresses are not accepted. Please use a permanent address (e.g. Gmail, Outlook, Yandex).',
+    ],
+    'err.passwordBreached': [
+      'Этот пароль встречается в известной утечке данных. Выберите другой пароль.',
+      'Bu şifre bilinen bir veri sızıntısında yer alıyor. Lütfen başka bir şifre seçin.',
+      'This password appears in a known data breach. Please choose a different one.',
+    ],
+    'err.signupIpLimit': [
+      'С этой сети недавно создано слишком много аккаунтов. Попробуйте позже.',
+      'Bu ağdan kısa sürede çok fazla hesap oluşturuldu. Lütfen daha sonra tekrar deneyin.',
+      'Too many accounts were created from this network recently. Please try again later.',
+    ],
+    'auth.registerHint': [
+      'Временные (одноразовые) адреса электронной почты не принимаются.',
+      'Geçici (tek kullanımlık) e-posta adresleri kabul edilmez.',
+      'Temporary (disposable) e-mail addresses are not accepted.',
+    ],
+    'mfa.loginEmailTitle': [
+      'Это вы входите в аккаунт?',
+      'Bu giriş siz misiniz?',
+      'Is this you signing in?',
+    ],
+    'mfa.loginEmailBody': [
+      'Вы входите из необычного места. Введите 6-значный код, который мы отправили на вашу почту.',
+      'Alışılmadık bir konumdan giriş yapıyorsunuz. E-posta adresinize gönderdiğimiz 6 haneli kodu girin.',
+      'You are signing in from an unusual location. Enter the 6-digit code we sent to your e-mail.',
+    ],
     'err.rateLimited': [
       'Слишком много попыток. Подождите минуту.',
       'Çok fazla deneme. Lütfen bir dakika bekleyin.',

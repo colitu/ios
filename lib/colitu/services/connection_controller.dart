@@ -18,6 +18,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
 import 'package:colitu_vpn/colitu/services/server_latency.dart';
+import 'package:colitu_vpn/colitu/services/stall_watch.dart';
 import 'package:colitu_vpn/colitu/services/vpn_service.dart';
 import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
 import 'package:colitu_vpn/core/constants/preferences.dart';
@@ -83,7 +84,13 @@ class ColituConnectionController extends ChangeNotifier
   var _connectSerial = 0;
   var _disposed = false;
   DateTime? _connectStartedAt;
+  /// Transports that stalled, keyed by protocol (stalled while connecting,
+  /// any server) or by "serverKey|protocol" (stalled mid-session on that
+  /// server).
   final Map<String, DateTime> _stalledTransports = {};
+
+  /// Mid-session stall check of a live Hysteria2 tunnel (foreground only).
+  final _stallWatch = ColituStallWatch();
 
   /// Servers the tunnel reported as the problem, skipped by the automatic
   /// pick until the penalty passes.
@@ -326,6 +333,8 @@ class ColituConnectionController extends ChangeNotifier
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
+      // Checks from before the app went away do not count.
+      _stallWatch.reset(DateTime.now());
       unawaited(_checkDrops());
       unawaited(load(showLoading: false));
     }
@@ -619,7 +628,7 @@ class ColituConnectionController extends ChangeNotifier
     }
   }
 
-  Future<void> connect({bool reconnect = false}) async {
+  Future<void> connect({bool reconnect = false, VPNServer? target}) async {
     if (status == ColituVpnStatus.disconnecting || loading) return;
     if (paused != null) return;
     if (status == ColituVpnStatus.connecting && !reconnect) return;
@@ -631,7 +640,7 @@ class ColituConnectionController extends ChangeNotifier
       }
       throw const ColituPlanRequiredException();
     }
-    final server = effectiveServer;
+    final server = target ?? effectiveServer;
     if (server == null) {
       _fail(ColituLoc.I['err.noServers']);
       return;
@@ -679,7 +688,7 @@ class ColituConnectionController extends ChangeNotifier
       // Transports that stalled on this network a little earlier are tried
       // last; every transport the server offers is tried once before the
       // connect gives up, including one whose probe did not answer.
-      final excluded = _activeStalls();
+      final excluded = _activeStalls(server);
       final tried = <String>{};
       var engineStalled = false;
       final transports = config.outboundCandidates.length;
@@ -757,6 +766,7 @@ class ColituConnectionController extends ChangeNotifier
           status = ColituVpnStatus.connected;
           phase = ColituConnectPhase.idle;
           notice = null;
+          _stallWatch.reset(DateTime.now());
           _notify();
           unawaited(_fetchPublicIp(serial));
           unawaited(_checkRuDirectNotice());
@@ -825,10 +835,66 @@ class ColituConnectionController extends ChangeNotifier
     }
   }
 
-  Set<String> _activeStalls() {
+  Set<String> _activeStalls(VPNServer server) {
     final now = DateTime.now();
     _stalledTransports.removeWhere((_, until) => until.isBefore(now));
-    return _stalledTransports.keys.toSet();
+    final prefix = '${server.selectionKey}|';
+    return {
+      for (final key in _stalledTransports.keys)
+        if (!key.contains('|'))
+          key
+        else if (key.startsWith(prefix))
+          key.substring(prefix.length),
+    };
+  }
+
+  /// While connected on Hysteria2 with the app in front, checks every 5 s
+  /// that the tunnel carries traffic. Three failed checks in a row with the
+  /// device still on a network mark Hysteria2 stalled for this server and
+  /// reconnect to the same server on the next transport, at most once a
+  /// minute. Runs from the session clock, so it stops with the tunnel and
+  /// while iOS suspends the app.
+  void _watchForStall() {
+    final server = connectedServer;
+    final now = DateTime.now();
+    if (!connected ||
+        !_foreground ||
+        loading ||
+        server == null ||
+        server.isMultihop ||
+        transport != 'hysteria2' ||
+        !_stallWatch.due(now)) {
+      return;
+    }
+    final serial = _connectSerial;
+    final flowing = _stallWatch.begin(now, sessionDownBytes);
+    unawaited(() async {
+      final ok = flowing || await NetClient().reachability();
+      final hasNetwork =
+          ok || await ColituStallWatch.deviceHasNetwork();
+      if (_disposed ||
+          serial != _connectSerial ||
+          !connected ||
+          transport != 'hysteria2') {
+        // Another session (or none) by now: start its count afresh.
+        _stallWatch.reset(DateTime.now());
+        return;
+      }
+      final stalled = _stallWatch.finish(
+        ok: ok,
+        hasNetwork: hasNetwork,
+        now: DateTime.now(),
+      );
+      if (!stalled) return;
+      _stalledTransports['${server.selectionKey}|hysteria2'] =
+          DateTime.now().add(_stallPenalty);
+      debugPrint('Hysteria2 stalled mid-session; reconnecting on the next transport');
+      try {
+        await connect(reconnect: true, target: server);
+      } on ColituPlanRequiredException {
+        _fail(ColituLoc.I['err.noPlan']);
+      }
+    }());
   }
 
   void _fail(String message) {
@@ -1061,6 +1127,7 @@ class ColituConnectionController extends ChangeNotifier
       connectedSeconds = seconds.clamp(0, 1 << 31);
       await _sampleTraffic();
       _checkConnectDeadline(running: true);
+      _watchForStall();
       _pollRotationIfDue();
       _notify();
       return;

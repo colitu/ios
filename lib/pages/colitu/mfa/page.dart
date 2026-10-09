@@ -109,6 +109,8 @@ class _ColituMfaPageState extends State<ColituMfaPage> {
     }
   }
 
+  bool get _byEmail => widget.challenge.isEmail;
+
   void _toggleRecovery() {
     setState(() {
       _recovery = !_recovery;
@@ -148,7 +150,7 @@ class _ColituMfaPageState extends State<ColituMfaPage> {
             Center(child: ColituKicker(loc['mfa.kicker'], color: ColituColors.lilac)),
             const SizedBox(height: 12),
             Text(
-              loc['mfa.title'],
+              _byEmail ? loc['mfa.loginEmailTitle'] : loc['mfa.title'],
               textAlign: TextAlign.center,
               style: ColituText.display.copyWith(fontSize: 30),
             ),
@@ -156,7 +158,9 @@ class _ColituMfaPageState extends State<ColituMfaPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Text(
-                _recovery
+                _byEmail
+                    ? loc['mfa.loginEmailBody']
+                    : _recovery
                     ? loc['mfa.subRecovery']
                     : loc.format('mfa.sub', {'email': widget.challenge.email}),
                 textAlign: TextAlign.center,
@@ -199,21 +203,25 @@ class _ColituMfaPageState extends State<ColituMfaPage> {
                     onPressed: _submit,
                     loading: _loading,
                   ),
-                  const SizedBox(height: 10),
-                  Center(
-                    child: ColituLinkButton(
-                      key: const ValueKey('mfaToggleRecovery'),
-                      label: _recovery ? loc['mfa.useApp'] : loc['mfa.useRecovery'],
-                      onPressed: _loading ? null : _toggleRecovery,
+                  if (!_byEmail) ...[
+                    const SizedBox(height: 10),
+                    Center(
+                      child: ColituLinkButton(
+                        key: const ValueKey('mfaToggleRecovery'),
+                        label: _recovery ? loc['mfa.useApp'] : loc['mfa.useRecovery'],
+                        onPressed: _loading ? null : _toggleRecovery,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 14),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Text(loc['mfa.hint'], textAlign: TextAlign.center, style: ColituText.small),
+              child: _byEmail
+                  ? null
+                  : Text(loc['mfa.hint'], textAlign: TextAlign.center, style: ColituText.small),
             ),
             const SizedBox(height: 12),
             Center(

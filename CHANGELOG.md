@@ -4,6 +4,23 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
+## 5.6.0
+
+- Calls on the Fast connection hold up better: on servers that support it,
+  the app changes its UDP port every 30 seconds, so mobile networks that
+  slow down one long-lived connection never see one. If the Fast connection
+  stalls while the network is fine, the app switches that server to the
+  next connection method for 10 minutes.
+- When colitu.com cannot be reached, the app finds the Colitu service through
+  a signed list of alternative addresses.
+- New installations route all traffic through the VPN (privacy mode);
+  Russian sites going outside the VPN is an opt-in setting. Existing
+  installations keep their current behaviour.
+- Signing in from an unusual location can ask for a 6-digit code sent to
+  your e-mail.
+- Clearer messages when a sign-up is refused: temporary e-mail addresses,
+  passwords found in known data breaches, too many sign-ups from one network.
+
 ## 5.5.1
 
 - Locations: servers are grouped by country. A country with several servers

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:colitu_vpn/colitu/api/endpoint_list.dart';
 import 'package:colitu_vpn/core/pigeon/flutter_api.dart';
 import 'package:colitu_vpn/core/pigeon/host_api.dart';
 import 'package:colitu_vpn/core/pigeon/messages.g.dart';
@@ -19,6 +20,8 @@ Future<void> main() async {
       await _safeInit('Desktop window', _initDesktopWindow);
 
       runApp(const GoRouteApp());
+      // Signed endpoint list refresh, in the background.
+      unawaited(EndpointManager.instance.refreshIfDue());
     },
     (error, stack) => _logError('UNCAUGHT ZONE ERROR', error, stack),
   );

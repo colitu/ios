@@ -951,6 +951,32 @@ int? _loadPercent(Object? value) {
   };
 }
 
+final _hopPortsPattern = RegExp(r'^\d{4,5}-\d{4,5}$');
+
+/// Port hopping for Hysteria2: the client moves its QUIC flow to another
+/// server port every few seconds, so networks that throttle one long-lived
+/// UDP flow (Russian mobile operators) do not stall a call. Xray 26 reads it
+/// from streamSettings.finalmask.quicParams.udpHop; the older
+/// hysteriaSettings.udphop shape is ignored there. Returns null (no change
+/// to the config) when the panel sends no valid range.
+Map<String, dynamic>? _hysteriaPortHop(Map<String, dynamic> transport) {
+  final ports = '${transport['hop_ports'] ?? ''}'.trim();
+  if (!_hopPortsPattern.hasMatch(ports)) return null;
+  final bounds = ports.split('-').map(int.parse).toList();
+  if (bounds[0] < 1 || bounds[1] > 65535 || bounds[0] > bounds[1]) {
+    return null;
+  }
+  final interval = _intOrNull(transport['hop_interval']);
+  return {
+    'quicParams': {
+      'udpHop': {
+        'ports': ports,
+        'interval': '${interval != null && interval > 0 ? interval : 30}',
+      },
+    },
+  };
+}
+
 Map<String, dynamic> _xrayMobileOutbound(
   String protocol,
   String host,
@@ -997,6 +1023,8 @@ Map<String, dynamic> _xrayMobileOutbound(
       'version': 2,
       'auth': requiredValue(credentials, 'password'),
     };
+    final hop = _hysteriaPortHop(transport);
+    if (hop != null) stream['finalmask'] = hop;
     return {
       'tag': 'proxy',
       'protocol': 'hysteria',

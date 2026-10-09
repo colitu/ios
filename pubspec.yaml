@@ -1,7 +1,7 @@
 name: colitu_vpn
 description: "Colitu Secure VPN"
 publish_to: "none"
-version: 5.5.1+51
+version: 5.6.0+52
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -77,6 +77,7 @@ dependencies:
   tray_manager: ^0.5.2
   window_manager: ^0.5.1
   win32: ^5.15.0
+  pointycastle: ^4.0.0
 
 dev_dependencies:
   flutter_test:

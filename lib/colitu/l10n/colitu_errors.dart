@@ -48,6 +48,12 @@ String colituErrorMessage(Object error, {bool signingIn = false}) {
         return loc['err.credentials'];
       case 'INVALID_REGISTRATION':
         return loc['err.registration'];
+      case 'DISPOSABLE_EMAIL':
+        return loc['err.disposableEmail'];
+      case 'PASSWORD_BREACHED':
+        return loc['err.passwordBreached'];
+      case 'SIGNUP_IP_LIMIT':
+        return loc['err.signupIpLimit'];
       case 'RATE_LIMITED':
         return loc['err.rateLimited'];
       case 'DEVICE_LIMIT_REACHED':

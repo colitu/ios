@@ -36,6 +36,15 @@ class _ColituGatePageState extends State<ColituGatePage> {
   }
 
   Future<void> _routeOnce() async {
+    // First thing: the privacy mode default depends on what an earlier
+    // version left behind, before this start writes anything itself.
+    try {
+      await PreferencesKey().resolveColituPrivacyDefault(
+        hasSession: () async => await SecureTokenStore().readTokens() != null,
+      );
+    } catch (error) {
+      debugPrint('Privacy default failed: $error');
+    }
     await ColituLoc.I.load();
     if (await SecureTokenStore().readTokens() != null &&
         await AppSession.instance.pendingVerificationEmail() != null) {

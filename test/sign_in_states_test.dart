@@ -45,6 +45,21 @@ void main() {
       expect(ttl, inInclusiveRange(118, 120));
     });
 
+    test('mfa_method defaults to totp and reads email', () {
+      final plain = APIException.fromResponse(_response(403, {
+        'error': {'code': 'MFA_REQUIRED'},
+        'mfa_token': 'abc',
+      }));
+      expect(AuthService.mfaChallengeOf(plain, 'a@b.c')!.method, 'totp');
+      final byMail = APIException.fromResponse(_response(403, {
+        'error': {'code': 'MFA_REQUIRED'},
+        'mfa_token': 'abc',
+        'mfa_method': 'email',
+        'mfa_expires_in': 600,
+      }));
+      expect(AuthService.mfaChallengeOf(byMail, 'a@b.c')!.isEmail, isTrue);
+    });
+
     test('a challenge without a token is not a challenge', () {
       final error = APIException.fromResponse(_response(403, {
         'error': {'code': 'MFA_REQUIRED'},

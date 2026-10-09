@@ -328,13 +328,43 @@ class PreferencesKey {
   static const _colituPrivacyMode = "colituPrivacyMode";
 
   /// Privacy mode: Russian addresses go through the tunnel too, instead of
-  /// leaving it directly on a server outside Russia. Off by default.
+  /// leaving it directly on a server outside Russia. On by default for new
+  /// installs; installs that already had Colitu state keep it off until the
+  /// user turns it on (see [resolveColituPrivacyDefault]).
   Future<bool> readColituPrivacyMode() async {
     return await _prefs.getBool(_colituPrivacyMode) ?? false;
   }
 
   Future<void> saveColituPrivacyMode(bool value) async {
     await _prefs.setBool(_colituPrivacyMode, value);
+  }
+
+  /// Privacy mode is on by default only for a fresh install: one with no
+  /// stored Colitu preference at all and no stored session. Anything else is
+  /// an existing install and keeps the earlier behaviour (off).
+  static bool colituPrivacyDefaultFor(
+    Iterable<String> storedKeys, {
+    required bool hasSession,
+  }) {
+    if (hasSession) return false;
+    return !storedKeys.any((key) => key.toLowerCase().startsWith('colitu'));
+  }
+
+  /// Stores the privacy mode default once: nothing happens when the setting
+  /// is already stored. Call it before anything else writes a Colitu
+  /// preference or reads the token store (which writes a marker preference).
+  /// [hasSession] is asked only when the stored keys alone say "fresh".
+  Future<void> resolveColituPrivacyDefault({
+    required Future<bool> Function() hasSession,
+  }) async {
+    if (await _prefs.getBool(_colituPrivacyMode) != null) return;
+    final keys = await _prefs.getKeys();
+    final signedIn = keys.any((key) => key.toLowerCase().startsWith('colitu'))
+        ? true
+        : await hasSession();
+    await saveColituPrivacyMode(
+      colituPrivacyDefaultFor(keys, hasSession: signedIn),
+    );
   }
 
   static const _colituRuDirectNoticeShown = "colituRuDirectNoticeShown";

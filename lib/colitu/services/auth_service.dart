@@ -58,10 +58,16 @@ class MfaChallenge {
     required this.token,
     required this.email,
     required this.expiresAt,
+    this.method = 'totp',
   });
 
   final String token;
   final String email;
+
+  /// `totp` (authenticator app / recovery code) or `email` (code sent to the
+  /// address because the sign-in came from an unusual country).
+  final String method;
+  bool get isEmail => method == 'email';
 
   /// When the panel stops accepting [token] (`mfa_expires_in`).
   final DateTime expiresAt;
@@ -132,10 +138,12 @@ class AuthService {
     if (token is! String || token.isEmpty) return null;
     final seconds = error.details?['mfa_expires_in'];
     final ttl = seconds is num && seconds > 0 ? seconds.toInt() : 300;
+    final method = error.details?['mfa_method'];
     return MfaChallenge(
       token: token,
       email: email.trim(),
       expiresAt: DateTime.now().add(Duration(seconds: ttl)),
+      method: method is String && method.isNotEmpty ? method : 'totp',
     );
   }
 
