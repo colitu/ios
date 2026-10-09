@@ -232,7 +232,10 @@ class PreferencesEndpointStorage implements EndpointStorage {
   static const _versionKey = 'colituEndpointListVersion';
   static const _lastWorkingKey = 'colituApiLastWorkingBase';
 
-  final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
+  // Created on first use: APIClient builds the endpoint manager in its
+  // constructor, and widget tests construct APIClient without a preferences
+  // platform implementation.
+  late final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
 
   @override
   Future<String?> readList() => _prefs.getString(_listKey);
