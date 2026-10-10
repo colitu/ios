@@ -21,7 +21,7 @@ dependencies:
   quick_actions: ^1.1.0
   go_router: ^17.2.2
   image_picker: ^1.2.1
-  process: ^5.0.5
+  process: ^5.0.6
 
   #---------- dart.dev plugin
   # core
