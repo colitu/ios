@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:colitu_vpn/colitu/api/api_client.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
@@ -8,6 +9,7 @@ import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
 import 'package:colitu_vpn/colitu/services/notice_service.dart';
+import 'package:colitu_vpn/colitu/services/recovery_set.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
 import 'package:path/path.dart' as p;
 
@@ -172,6 +174,23 @@ class ColituVPNService {
         ..._freshQuery(),
       },
     );
+  }
+
+  /// `GET /client/recovery`: the recovery set. A body that is not a valid set
+  /// (no usable config, bad dates) is an error, so the stored one stays.
+  /// [clientCountry] (last `client_country` of `/servers`) is sent as
+  /// `client_country`; omitted when unknown.
+  Future<ColituRecoverySet> recoverySet({String? clientCountry}) {
+    return _client.get(APIEndpoint.clientRecovery, (json) {
+      final set = ColituRecoverySet.parse(json);
+      if (set == null) {
+        throw const APIException(
+          APIErrorCode.decodingFailed,
+          'Recovery set is invalid',
+        );
+      }
+      return set;
+    }, queryParameters: recoveryQuery(clientCountry));
   }
 
   static VPNConfig _decodeConfig(Object? json) {
@@ -366,4 +385,12 @@ Map<String, dynamic>? _mapFromJson(Map<String, dynamic> json, String key) {
 
 Map<String, dynamic> _freshQuery() {
   return {'_ts': DateTime.now().millisecondsSinceEpoch};
+}
+
+/// Query of the recovery-set fetch: `client_country=<CC>` (upper case) when a
+/// country is known, else only the cache-buster.
+@visibleForTesting
+Map<String, dynamic> recoveryQuery(String? clientCountry) {
+  final country = (clientCountry ?? '').trim().toUpperCase();
+  return {..._freshQuery(), if (country.isNotEmpty) 'client_country': country};
 }

@@ -366,13 +366,16 @@ class ColituAdaptiveMemory {
 /// user's ISP network (or country), with the anonymous token that lets this
 /// device's protocol observations count for that network. Kept from the
 /// last server list fetched with the VPN off, for the `client_network` it
-/// came with.
+/// came with. `preferred` (Adaptive Connect 3.0): protocols that worked for
+/// most users there, best first; a device without its own memory of the
+/// network starts with them ([colituHintedStart]).
 class ColituNetworkHints {
   const ColituNetworkHints({
     required this.clientNetwork,
     this.token = '',
     this.blocked = const {},
     this.scope = '',
+    this.preferred = const [],
   });
 
   static const none = ColituNetworkHints(clientNetwork: '');
@@ -380,6 +383,10 @@ class ColituNetworkHints {
   final String clientNetwork;
   final String token;
   final Set<String> blocked;
+
+  /// Protocols that worked for most users on this network, best first;
+  /// never contains a [blocked] one.
+  final List<String> preferred;
 
   /// "network" or "country".
   final String scope;
@@ -411,23 +418,47 @@ class ColituNetworkHints {
     };
   }
 
+  /// The preferred protocols for the current network: empty unless the hints
+  /// were fetched on it (same binding as [blocked] and the token).
+  List<String> preferredFor(String currentClientNetwork) =>
+      clientNetwork.isNotEmpty && clientNetwork == currentClientNetwork
+      ? preferred
+      : const [];
+
+  /// A protocol list of the hints: lowercase, trimmed, no duplicates, in the
+  /// given order; anything that is not a string is dropped.
+  static List<String> parseProtocols(Object? value) {
+    if (value is! List) return const [];
+    final seen = <String>{};
+    return [
+      for (final item in value)
+        if (item is String &&
+            item.trim().isNotEmpty &&
+            seen.add(item.trim().toLowerCase()))
+          item.trim().toLowerCase(),
+    ];
+  }
+
   /// From the `/servers` body; null when the body says nothing about the
   /// network (VPN on, older panel), so the stored hints stay.
   static ColituNetworkHints? fromServers(Object? json, String clientNetwork) {
     if (clientNetwork.isEmpty || json is! Map) return null;
     final hints = json['network_hints'];
-    final blocked = hints is Map && hints['blocked'] is List
-        ? {
-            for (final value in hints['blocked'] as List)
-              if (value is String && value.trim().isNotEmpty)
-                value.trim().toLowerCase(),
-          }
+    final blocked = hints is Map
+        ? parseProtocols(hints['blocked']).toSet()
         : <String>{};
+    final preferred = hints is Map
+        ? [
+            for (final protocol in parseProtocols(hints['preferred']))
+              if (!blocked.contains(protocol)) protocol,
+          ]
+        : <String>[];
     final token = json['network_token'];
     return ColituNetworkHints(
       clientNetwork: clientNetwork,
       token: token is String ? token.trim() : '',
       blocked: blocked,
+      preferred: preferred,
       scope: hints is Map && hints['scope'] is String
           ? hints['scope'] as String
           : '',
@@ -438,6 +469,7 @@ class ColituNetworkHints {
     'network': clientNetwork,
     'token': token,
     'blocked': blocked.toList(),
+    'preferred': preferred,
     'scope': scope,
   };
 
@@ -446,20 +478,61 @@ class ColituNetworkHints {
     try {
       final json = jsonDecode(raw);
       if (json is! Map) return none;
+      final blocked = <String>{
+        if (json['blocked'] is List)
+          for (final value in json['blocked'] as List)
+            if (value is String) value,
+      };
       return ColituNetworkHints(
         clientNetwork: json['network'] is String ? json['network'] as String : '',
         token: json['token'] is String ? json['token'] as String : '',
-        blocked: {
-          if (json['blocked'] is List)
-            for (final value in json['blocked'] as List)
-              if (value is String) value,
-        },
+        blocked: blocked,
+        // Records stored before 3.0 have none: an empty list.
+        preferred: [
+          for (final protocol in parseProtocols(json['preferred']))
+            if (!blocked.contains(protocol)) protocol,
+        ],
         scope: json['scope'] is String ? json['scope'] as String : '',
       );
     } catch (_) {
       return none;
     }
   }
+}
+
+/// Start order from the network hints when the device has no memory of this
+/// network (Adaptive Connect 3.0; Android `ColituNetworkHintsPolicy.hintedStart`).
+/// The [preferred] protocols that are on offer and not in [stalled] go first,
+/// in the hint's order, then the rest in the order [rank] gives. Null when
+/// the device has a last good transport here ([lastGood], its own experience
+/// always wins), the hint is empty or none of it can be used: the usual
+/// probe and ranking decide. [hinted] is how many leading entries came from
+/// the hint. Null as well when [enabled] is false (`kAdaptiveConnect3`; callers
+/// pass the flag, the default is the feature on).
+({List<T> order, int hinted})? colituHintedStart<T>(
+  List<T> configs, {
+  required String? Function(T) protocolOf,
+  required List<String> preferred,
+  required Set<String> stalled,
+  required String? lastGood,
+  required List<T> Function(List<T>) rank,
+  bool enabled = true,
+}) {
+  if (!enabled || lastGood != null || preferred.isEmpty) return null;
+  final first = <T>[];
+  for (final protocol in preferred) {
+    if (stalled.contains(protocol)) continue;
+    final match = configs
+        .where((c) => protocolOf(c) == protocol && !first.contains(c))
+        .firstOrNull;
+    if (match != null) first.add(match);
+  }
+  if (first.isEmpty) return null;
+  final rest = [
+    for (final c in configs)
+      if (!first.contains(c)) c,
+  ];
+  return (order: [...first, ...rank(rest)], hinted: first.length);
 }
 
 /// Stall marks can never lock a network: when the marks would leave at

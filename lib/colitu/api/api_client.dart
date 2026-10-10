@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
+import 'package:colitu_vpn/colitu/api/cert_pins.dart';
 import 'package:colitu_vpn/colitu/api/endpoint_list.dart';
 import 'package:colitu_vpn/colitu/api/models/auth_models.dart';
 import 'package:colitu_vpn/colitu/config/app_environment.dart';
@@ -38,6 +39,9 @@ class APIClient {
         followRedirects: false,
       ),
     );
+    // Pinned trust (see CertPins); the log goes before the failover.
+    dio.httpClientAdapter = CertPins.adapter();
+    dio.interceptors.add(CertPinLogInterceptor());
     if (EndpointManager.instance.enabled) {
       dio.interceptors.add(ApiFailoverInterceptor(dio, EndpointManager.instance));
     }

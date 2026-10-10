@@ -484,6 +484,25 @@ class _FakeTokenStore implements SecureTokenStore {
 
   @override
   Future<String?> readConfigEtag() async => configEtag;
+  String? recoverySet;
+  int? recoveryAttempt;
+
+  @override
+  Future<String?> readRecoverySet() async => recoverySet;
+
+  @override
+  Future<void> saveRecoverySet(String value) async => recoverySet = value;
+
+  @override
+  Future<void> clearRecoverySet() async => recoverySet = null;
+
+  @override
+  Future<int?> readRecoveryAttempt() async => recoveryAttempt;
+
+  @override
+  Future<void> saveRecoveryAttempt(int epochMs) async =>
+      recoveryAttempt = epochMs;
+
 
   @override
   Future<String?> readLastGoodConfig() async => lastGoodConfig;

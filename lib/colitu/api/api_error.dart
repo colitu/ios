@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:colitu_vpn/colitu/api/cert_pins.dart';
 import 'package:dio/dio.dart';
 
 enum APIErrorCode {
@@ -193,7 +194,10 @@ class APIException implements Exception {
     if (error.type == DioExceptionType.connectionError ||
         error.type == DioExceptionType.connectionTimeout ||
         error.type == DioExceptionType.sendTimeout ||
-        error.type == DioExceptionType.receiveTimeout) {
+        error.type == DioExceptionType.receiveTimeout ||
+        // A refused TLS handshake (certificate pinning) is a network-level
+        // failure: the base failover and the recovery set treat it like one.
+        CertPins.isTlsFailure(error)) {
       return APIException(
         APIErrorCode.networkUnavailable,
         friendlyMessageForNetworkFailure(error),

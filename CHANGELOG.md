@@ -4,6 +4,17 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
+## 5.8.0
+
+- The Colitu API and its mirrors are reached only over certificates that
+  chain to the Let's Encrypt (ISRG) or Google Trust Services roots, so a
+  root certificate installed on the device cannot read sign-in or session
+  traffic. The check ends on 31 December 2027, so an old app never locks
+  itself out.
+- Groundwork for Adaptive Connect 3.0 (a start order from other users'
+  results on the same network, and a recovery set of servers for when the
+  API cannot be reached). It is in the app but switched off in this version.
+
 ## 5.7.0
 
 - Adaptive Connect 2.0. "Fastest server" now really is the fastest: the app

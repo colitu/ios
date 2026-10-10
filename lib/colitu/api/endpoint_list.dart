@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:colitu_vpn/colitu/api/cert_pins.dart';
 import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/core/tools/logger.dart';
 import 'package:dio/dio.dart';
@@ -320,7 +321,9 @@ bool shouldFailOver(DioException error, String method) {
 }
 
 bool _isSocketOrHandshake(Object? error) =>
-    error is SocketException || error is HandshakeException;
+    error is SocketException ||
+    error is HandshakeException ||
+    error is TlsException;
 
 /// Holds the accepted list, picks the bases and refreshes the list.
 class EndpointManager {
@@ -452,7 +455,9 @@ class EndpointManager {
       followRedirects: false,
       validateStatus: (status) => status != null,
     ),
-  );
+  )
+    ..httpClientAdapter = CertPins.adapter()
+    ..interceptors.add(CertPinLogInterceptor());
 }
 
 /// Dio interceptor: sends a request to the best base and moves to the next

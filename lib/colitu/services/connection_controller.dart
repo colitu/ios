@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:colitu_vpn/colitu/api/api_error.dart';
+import 'package:colitu_vpn/colitu/config/adaptive_connect3.dart';
 import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
@@ -18,6 +19,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
+import 'package:colitu_vpn/colitu/services/recovery_set.dart';
 import 'package:colitu_vpn/colitu/services/server_latency.dart';
 import 'package:colitu_vpn/colitu/services/stall_watch.dart';
 import 'package:colitu_vpn/colitu/services/ui_mode.dart';
@@ -143,6 +145,9 @@ class ColituConnectionController extends ChangeNotifier
     memory: _memory,
     now: DateTime.now(),
   );
+
+  /// A fetch of the recovery set is running (one at a time).
+  var _recoveryFetching = false;
 
   /// Bumped by everything that ends a drop recovery: a connect or a
   /// disconnect from the user, a pause, sign-out.
@@ -507,6 +512,7 @@ class ColituConnectionController extends ChangeNotifier
       await _restoreSelection();
       if (!offline) await _loadRotationQuietly();
       _notify();
+      unawaited(_refreshRecoverySetIfDue());
       return true;
     } catch (e, stack) {
       debugPrint('Colitu refresh failed: $e');
@@ -830,7 +836,15 @@ class ColituConnectionController extends ChangeNotifier
       throw const ColituPlanRequiredException();
     }
     final picked = target ?? effectiveServer;
-    if (picked == null) {
+    // No server list (the API was unreachable at start-up): in automatic
+    // mode a stored recovery set may still connect.
+    final listless =
+        picked == null &&
+        target == null &&
+        _automatic &&
+        servers.isEmpty &&
+        await _storedRecoverySet() != null;
+    if (picked == null && !listless) {
       _fail(ColituLoc.I['err.noServers']);
       return;
     }
@@ -850,7 +864,11 @@ class ColituConnectionController extends ChangeNotifier
       await _ensureAdaptive();
       await _refreshNetwork();
       if (serial != _connectSerial) return;
-      final server = target ?? effectiveServer ?? picked;
+      if (listless) {
+        await _connectWithoutList(serial);
+        return;
+      }
+      final server = target ?? effectiveServer ?? picked!;
       // Whether the exit rotates decides the transports: learn it before
       // connecting if it is quickly known.
       if (rotation == null && !server.isMultihop) {
@@ -887,7 +905,20 @@ class ColituConnectionController extends ChangeNotifier
             node: fallback ? candidate.id : null,
             exclude: failedNodes,
           );
+        } on TimeoutException catch (e) {
+          // The API did not answer in time: the recovery set may still do.
+          if (fallback &&
+              await _recoverFrom(e, serial, failedNodes, multihop: false)) {
+            return;
+          }
+          rethrow;
         } on APIException catch (e) {
+          // Every API base failed at network level: the recovery set.
+          if (fallback &&
+              ColituRecovery.isNetworkLevel(e) &&
+              await _recoverFrom(e, serial, failedNodes, multihop: false)) {
+            return;
+          }
           // This node cannot serve the tunnel right now; the next one may.
           if (!fallback || last || !_serverSpecific(e)) rethrow;
           if (serial != _connectSerial) return;
@@ -972,6 +1003,176 @@ class ColituConnectionController extends ChangeNotifier
     }
   }
 
+  // ── Recovery set (Adaptive Connect 3.0) ───────────────────────────────
+
+  Future<ColituRecoverySet?> _storedRecoverySet() async {
+    // Off-switch: no stored set is ever used (listless connect, recovery).
+    if (!kAdaptiveConnect3) return null;
+    try {
+      return ColituRecoverySet.parse(await _tokenStore.readRecoverySet());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _dropRecoverySet() async {
+    try {
+      await _tokenStore.clearRecoverySet();
+    } catch (e) {
+      debugPrint('Recovery set not deleted: $e');
+    }
+  }
+
+  /// Background fetch of the recovery set while signed in: when none is
+  /// stored or it is older than 24 h, at most one attempt per 6 h. Never
+  /// blocks anything. 401/403 delete the set; network errors and 5xx keep it.
+  Future<void> _refreshRecoverySetIfDue() async {
+    if (!kAdaptiveConnect3 || _recoveryFetching || paused != null) return;
+    _recoveryFetching = true;
+    try {
+      final now = DateTime.now();
+      final stored = await _storedRecoverySet();
+      final attempt = await _tokenStore.readRecoveryAttempt();
+      if (!ColituRecovery.refreshDue(
+        generatedAt: stored?.generatedAt,
+        lastAttempt: attempt == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(attempt),
+        now: now,
+        enabled: kAdaptiveConnect3,
+      )) {
+        return;
+      }
+      await _tokenStore.saveRecoveryAttempt(now.millisecondsSinceEpoch);
+      try {
+        final fresh = await _vpnService.recoverySet(clientCountry: _clientCountry).timeout(
+          const Duration(seconds: 20),
+        );
+        await _tokenStore.saveRecoverySet(fresh.raw);
+        debugPrint(
+          'Recovery set stored: ${fresh.configs.length} servers (until ${fresh.recoveryUntil.toIso8601String()})',
+        );
+      } catch (e) {
+        if (ColituRecovery.dropsSet(e)) {
+          await _dropRecoverySet();
+        }
+        debugPrint('Recovery set not refreshed: $e');
+      }
+    } catch (e) {
+      debugPrint('Recovery set refresh skipped: $e');
+    } finally {
+      _recoveryFetching = false;
+    }
+  }
+
+  /// The list entry of a recovery config's node, else one built from the
+  /// envelope (the node id is the key of the Adaptive Connect memory).
+  VPNServer _recoveryServer(VPNConfig config) {
+    for (final server in servers) {
+      if (!server.isMultihop && server.identityKeys.contains(config.serverId)) {
+        return server;
+      }
+    }
+    return VPNServer.fromJson({
+      'id': config.serverId,
+      'name': config.serverCountry ?? 'VPN Server',
+      'country_code': config.serverCountry ?? '',
+      'available': true,
+    });
+  }
+
+  /// No server list and a stored recovery set: finds out whether the API is
+  /// reachable with the plain config call (what a connect asks first). If it
+  /// answers, only the list failed to load and the usual error stays; if
+  /// every base fails at network level the recovery set takes over.
+  Future<void> _connectWithoutList(int serial) async {
+    try {
+      await _vpnService.config().timeout(_configTimeout);
+    } catch (e) {
+      if (serial != _connectSerial) return;
+      if (ColituRecovery.isNetworkLevel(e) &&
+          await _recoverFrom(e, serial, const [], multihop: false)) {
+        return;
+      }
+      rethrow;
+    }
+    if (serial != _connectSerial) return;
+    unawaited(load(showLoading: false));
+    _fail(ColituLoc.I['err.noServers']);
+  }
+
+  /// The API cannot be reached and the app keeps no regular cached config:
+  /// tries the servers of the stored recovery set in order, skipping those in
+  /// [failedNodes]. Each envelope goes through the normal transport order
+  /// like a cached config, and its tunnel config is handed to the packet
+  /// tunnel the same way. True when the connect is settled (connected, or a
+  /// newer connect took over); false: nothing worked, the caller reports the
+  /// API error as before.
+  Future<bool> _recoverFrom(
+    Object apiError,
+    int serial,
+    List<String> failedNodes, {
+    required bool multihop,
+  }) async {
+    final set = await _storedRecoverySet();
+    final decision = ColituRecovery.decide(
+      automatic: _automatic,
+      multihop: multihop,
+      apiError: apiError,
+      cacheUsable: false,
+      set: set,
+      now: DateTime.now(),
+      enabled: kAdaptiveConnect3,
+    );
+    if (decision == ColituRecoveryDecision.expired) {
+      debugPrint('Recovery set past recovery_until: deleted');
+      await _dropRecoverySet();
+      return false;
+    }
+    if (decision != ColituRecoveryDecision.use || set == null) return false;
+    if (serial != _connectSerial) return true;
+    debugPrint(
+      'API unreachable and no usable cache: recovery set, ${set.configs.length} servers (until ${set.recoveryUntil.toIso8601String()})',
+    );
+    final tried = [...failedNodes];
+    final budget = DateTime.now().add(_connectBudget);
+    var first = true;
+    while (true) {
+      final config = ColituRecovery.next(set, tried);
+      if (config == null) return false;
+      if (!first && DateTime.now().isAfter(budget)) return false;
+      first = false;
+      tried.add(config.serverId);
+      phase = ColituConnectPhase.switchingServer;
+      _notify();
+      final server = _recoveryServer(config);
+      final serverEnd = DateTime.now().add(_serverBudget);
+      try {
+        final result = await _connectServer(
+          server,
+          serial,
+          deadline: serverEnd.isBefore(budget) ? serverEnd : budget,
+          preset: config,
+        );
+        if (serial != _connectSerial) return true;
+        if (result.outcome == _Attempt.connected ||
+            result.outcome == _Attempt.superseded) {
+          if (result.outcome == _Attempt.connected) {
+            // Reachable through the tunnel now: refresh list and set.
+            unawaited(load(showLoading: false));
+          }
+          return true;
+        }
+        if (result.outcome == _Attempt.offline) return false;
+        _memory.penalize(networkKey, server.selectionKey, DateTime.now());
+        _saveMemory();
+      } on APIException catch (e) {
+        if (serial != _connectSerial) return true;
+        debugPrint('Recovery server ${server.selectionKey} not usable: $e');
+      }
+    }
+  }
+
   /// Errors after which another node may still serve the tunnel.
   static bool _serverSpecific(APIException e) =>
       e.code == APIErrorCode.serverUnavailable ||
@@ -987,20 +1188,23 @@ class ColituConnectionController extends ChangeNotifier
     required DateTime deadline,
     String? node,
     List<String> exclude = const [],
+    VPNConfig? preset,
   }) async {
     const superseded = (outcome: _Attempt.superseded, engineStalled: false);
     // The warm spare's config (another server, automatic mode) is fetched
-    // alongside the primary's.
-    final spareFetch = _startSpareFetch(server);
-    var config = server.isMultihop
-        ? await _vpnService.routeConfig(server.id).timeout(_configTimeout)
-        : await _vpnService
-              .config(
-                serverId: server.selectionKey,
-                node: node,
-                exclude: exclude,
-              )
-              .timeout(_configTimeout);
+    // alongside the primary's; a recovery config ([preset]) needs no API.
+    final spareFetch = preset == null ? _startSpareFetch(server) : null;
+    var config =
+        preset ??
+        (server.isMultihop
+            ? await _vpnService.routeConfig(server.id).timeout(_configTimeout)
+            : await _vpnService
+                  .config(
+                    serverId: server.selectionKey,
+                    node: node,
+                    exclude: exclude,
+                  )
+                  .timeout(_configTimeout));
     if (serial != _connectSerial) return superseded;
     // A multihop route and a rotating exit run on VLESS only.
     if (server.isMultihop || config.isMultihop || _rotationApplies) {
@@ -1047,6 +1251,32 @@ class ColituConnectionController extends ChangeNotifier
         ? lastGood
         : null;
     _adapter.networkToken = _hints.tokenFor(_clientNetwork);
+    // No memory of this network: the transports that worked for most users
+    // here go first and the probe round is skipped (Adaptive Connect 3.0).
+    List<String>? startOrder;
+    if (!server.isMultihop && !config.isMultihop) {
+      int rankOf(VPNOutboundCandidate c) =>
+          ColituVPNConfigAdapter.transportRankFor(
+            c.protocolType,
+            excluded: excluded,
+            soft: marks.soft,
+          );
+      final hinted = colituHintedStart<VPNOutboundCandidate>(
+        config.outboundCandidates,
+        protocolOf: (c) => c.protocolType,
+        preferred: _hints.preferredFor(_clientNetwork),
+        stalled: _memory.stalledTransports(network, key, DateTime.now()),
+        lastGood: lastGood,
+        rank: (rest) => [...rest]..sort((a, b) => rankOf(a).compareTo(rankOf(b))),
+        enabled: kAdaptiveConnect3,
+      );
+      if (hinted != null) {
+        startOrder = [for (final c in hinted.order) c.protocolType];
+        debugPrint(
+          'no memory of this network, starting with the hinted [${startOrder.take(hinted.hinted).join(', ')}]',
+        );
+      }
+    }
     final tried = <String>{};
     var engineStalled = false;
     final transports = config.outboundCandidates.length;
@@ -1070,6 +1300,7 @@ class ColituConnectionController extends ChangeNotifier
               softExcludeProtocols: marks.soft,
               skipProtocols: tried,
               preferProtocol: prefer,
+              startOrder: startOrder,
             )
             .timeout(_prepareTimeout);
       } on APIException catch (e) {

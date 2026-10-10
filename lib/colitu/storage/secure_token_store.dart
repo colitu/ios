@@ -24,6 +24,8 @@ class SecureTokenStore {
   static const _configEtagKey = 'colitu_xray_etag';
   static const _runtimePolicyKey = 'colitu_runtime_policy';
   static const _pendingEmailKey = 'colitu_pending_verification_email';
+  static const _recoverySetKey = 'colitu_recovery_set';
+  static const _recoveryAttemptKey = 'colitu_recovery_attempt';
 
   static const _allKeys = [
     _accessTokenKey,
@@ -35,6 +37,8 @@ class SecureTokenStore {
     _configEtagKey,
     _runtimePolicyKey,
     _pendingEmailKey,
+    _recoverySetKey,
+    _recoveryAttemptKey,
   ];
 
   /// Set in SharedPreferences once the Keychain items use this-device-only
@@ -165,6 +169,22 @@ class SecureTokenStore {
 
   Future<void> clearRuntimePolicy() => _delete(_runtimePolicyKey);
 
+  /// Adaptive Connect 3.0 recovery set (the raw JSON of
+  /// `GET /client/recovery`): node credentials, so it lives in the Keychain
+  /// next to the other secrets and goes with them on sign-out.
+  Future<String?> readRecoverySet() => _read(_recoverySetKey);
+
+  Future<void> saveRecoverySet(String value) => _write(_recoverySetKey, value);
+
+  Future<void> clearRecoverySet() => _delete(_recoverySetKey);
+
+  /// When the last fetch of the recovery set was tried (epoch ms).
+  Future<int?> readRecoveryAttempt() async =>
+      int.tryParse(await _read(_recoveryAttemptKey) ?? '');
+
+  Future<void> saveRecoveryAttempt(int epochMs) =>
+      _write(_recoveryAttemptKey, '$epochMs');
+
   /// Set while the signed-in account still has to confirm this e-mail.
   Future<String?> readPendingVerificationEmail() async {
     final value = await _read(_pendingEmailKey);
@@ -218,6 +238,8 @@ class SecureTokenStore {
       await _delete(_configEtagKey);
       await _delete(_runtimePolicyKey);
       await _delete(_pendingEmailKey);
+      await _delete(_recoverySetKey);
+      await _delete(_recoveryAttemptKey);
     });
   }
 }

@@ -81,6 +81,7 @@ class ColituVPNConfigAdapter {
     Set<String> skipProtocols = const {},
     String? preferProtocol,
     Set<String> softExcludeProtocols = const {},
+    List<String>? startOrder,
   }) async {
     final rows = <CoreConfigCompanion>[];
     final name = _displayName(server, config);
@@ -100,6 +101,7 @@ class ColituVPNConfigAdapter {
           excludeProtocols,
           preferProtocol,
           softExcludeProtocols,
+          startOrder,
         ),
       );
     } else if (rows.isEmpty && config.outboundConfig != null) {
@@ -220,6 +222,7 @@ class ColituVPNConfigAdapter {
     Set<String> excludeProtocols, [
     String? preferProtocol,
     Set<String> softExcludeProtocols = const {},
+    List<String>? startOrder,
   ]) async {
     final states = <_Candidate>[];
     final observations = <String, Map<String, dynamic>>{};
@@ -262,6 +265,26 @@ class ColituVPNConfigAdapter {
         left.candidate.protocolType,
       ).compareTo(rankOf(right.candidate.protocolType)),
     );
+
+    // Hinted start (Adaptive Connect 3.0): the order was decided from the
+    // network hints; the first transport that is on offer starts without a
+    // probe round.
+    if (startOrder != null) {
+      int position(_Candidate entry) {
+        final at = startOrder.indexOf(entry.candidate.protocolType);
+        return at < 0 ? startOrder.length : at;
+      }
+
+      final ordered = [...states]
+        ..sort((a, b) => position(a).compareTo(position(b)));
+      final selected = ordered.first;
+      lastChosenProtocol = selected.candidate.protocolType;
+      lastChosenLatencyMs = -1;
+      debugPrint('Hinted start, no probe: -> $lastChosenProtocol');
+      return selected.state.outboundCompanion.copyWith(
+        delay: const Value<int>(PingDelayConstants.unknown),
+      );
+    }
 
     // Probe answers by protocol; a missing entry did not answer.
     final delays = <String, int>{};
