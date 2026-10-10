@@ -36,8 +36,24 @@ import UIKit
         setUpMailComposer(binaryMessenger: binaryMessenger)
         setUpPasteboardImage(binaryMessenger: binaryMessenger)
         startNetworkTransitionMonitor(binaryMessenger: binaryMessenger)
+        setUpTunnelChannel(binaryMessenger: binaryMessenger)
         
         GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    }
+
+    /// Warm-spare swap: the app asks the tunnel to reload its core.
+    private func setUpTunnelChannel(binaryMessenger: FlutterBinaryMessenger) {
+        let channel = FlutterMethodChannel(name: "colitu/tunnel", binaryMessenger: binaryMessenger)
+        channel.setMethodCallHandler { call, result in
+            guard call.method == "reloadCore" else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            Task {
+                let ok = await VPNManager.shared.reloadCore()
+                await MainActor.run { result(ok) }
+            }
+        }
     }
 
     private func setUpMailComposer(binaryMessenger: FlutterBinaryMessenger) {

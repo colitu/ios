@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -110,12 +111,24 @@ class NetClient {
     }
   }
 
-  /// True when an HTTPS request reaches the Colitu API. Used right after the
-  /// tunnel comes up: any HTTP status proves traffic flows through it, and the
-  /// API is far quicker to answer than a third-party IP service. A fresh
-  /// client avoids reusing sockets that were opened before the tunnel.
-  Future<bool> reachability({
+  /// Generic connectivity endpoints (never the Colitu API): each answers
+  /// 204 or a short 200 from a nearby edge.
+  static const trafficCheckUrls = [
+    'https://cp.cloudflare.com/generate_204',
+    'https://www.gstatic.com/generate_204',
+    'http://www.msftconnecttest.com/connecttest.txt',
+  ];
+
+  /// True as soon as one of [trafficCheckUrls] answers 2xx. Used through the
+  /// tunnel right after it comes up and while it runs: the requests go out in
+  /// parallel and the first success decides. A fresh client avoids reusing
+  /// sockets that were opened before the tunnel.
+  ///
+  /// [proxy] (a `findProxy` answer) sends the requests through a local
+  /// proxy instead, such as the core's warm-spare check inbound.
+  Future<bool> trafficCheck({
     Duration timeout = const Duration(seconds: 3),
+    String? proxy,
   }) async {
     final client = Dio(
       BaseOptions(
@@ -125,23 +138,43 @@ class NetClient {
         headers: const {'Connection': 'close', 'Cache-Control': 'no-cache'},
       ),
     );
-    try {
-      final base = AppEnvironment.apiBaseUrl;
-      final origin = base.hasPort && base.port != 443
-          ? '${base.scheme}://${base.host}:${base.port}'
-          : '${base.scheme}://${base.host}';
-      final response = await client.get<String>(
-        '$origin/ready',
-        queryParameters: {'_ts': DateTime.now().millisecondsSinceEpoch},
-        options: Options(
-          responseType: ResponseType.plain,
-          validateStatus: (_) => true,
-        ),
+    if (proxy != null) {
+      client.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: () => HttpClient()..findProxy = (_) => proxy,
       );
-      return (response.statusCode ?? 0) > 0;
-    } catch (error) {
-      ygLogger('Reachability check failed: $error');
-      return false;
+    }
+    final done = Completer<bool>();
+    var pending = trafficCheckUrls.length;
+    Future<void> probe(String url) async {
+      try {
+        final response = await client.get<String>(
+          url,
+          options: Options(
+            responseType: ResponseType.plain,
+            followRedirects: false,
+            validateStatus: (_) => true,
+          ),
+        );
+        final code = response.statusCode ?? 0;
+        if (code >= 200 && code < 300 && !done.isCompleted) {
+          done.complete(true);
+        }
+      } catch (_) {
+        // This endpoint did not answer; another one may.
+      } finally {
+        pending--;
+        if (pending == 0 && !done.isCompleted) done.complete(false);
+      }
+    }
+
+    for (final url in trafficCheckUrls) {
+      unawaited(probe(url));
+    }
+    try {
+      return await done.future.timeout(
+        timeout + const Duration(milliseconds: 500),
+        onTimeout: () => false,
+      );
     } finally {
       client.close(force: true);
     }

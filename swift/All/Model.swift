@@ -96,6 +96,9 @@ enum TunnelRequest: Codable {
     case putDat(name: String, content: Data, mtimeMs: Int64)
     case commitDat
     case startXray
+    /// The app rewrote the core config (a warm-spare swap): restart only
+    /// the core; the tunnel interface stays.
+    case reloadCore
 }
 
 enum TunnelResponse: Codable {

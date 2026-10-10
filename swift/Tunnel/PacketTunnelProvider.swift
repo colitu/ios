@@ -428,10 +428,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     }
 
     override func handleAppMessage(_ messageData: Data) async -> Data? {
+        if let request = try? TunnelMessageCoder.decode(TunnelRequest.self, from: messageData),
+           case .reloadCore = request {
+            return try? TunnelMessageCoder.encode(reloadCoreFromApp())
+        }
         if Constants.useSystemExtension {
             return handleAppMessageSE(messageData)
         }
         return messageData
+    }
+
+    /// Warm-spare swap: the app wrote a new core config to the same path.
+    /// Only the core restarts (it reads the file again); the tunnel
+    /// interface, routes and DNS settings stay, so iOS shows no reconnect.
+    /// The core's open connections are dropped and reopened.
+    private func reloadCoreFromApp() -> TunnelResponse {
+        guard tunnelShouldRun, !userInitiatedStop, currentCoreBase64Text != nil else {
+            return .error("not_running")
+        }
+        stabilityLog("core_reload_requested", reason: StabilityReconnectReason.appReload.rawValue)
+        restartCoreForNewSituation(reason: .appReload)
+        return .ok
     }
 
     private func handleAppMessageSE(_ data: Data) -> Data? {
@@ -456,6 +473,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         case .startXray:
             fulfillStartSignal()
             response = .ok
+        case .reloadCore:
+            response = reloadCoreFromApp()
         }
         return try? TunnelMessageCoder.encode(response)
     }
@@ -760,11 +779,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         if let proxyTag {
             var routing = config["routing"] as? [String: Any] ?? [:]
             let rules = routing["rules"] as? [[String: Any]] ?? []
-            let probeRule: [String: Any] = [
+            // With a warm spare the keepalive probe follows the normal path
+            // (the balancer): a dead primary while the spare carries the
+            // traffic must not restart the core again and again.
+            let balancers = routing["balancers"] as? [[String: Any]] ?? []
+            var probeRule: [String: Any] = [
                 "type": "field",
-                "inboundTag": [probeInboundTag],
-                "outboundTag": proxyTag
+                "inboundTag": [probeInboundTag]
             ]
+            if balancers.contains(where: { ($0["tag"] as? String) == warmSpareBalancerTag }) {
+                probeRule["balancerTag"] = warmSpareBalancerTag
+            } else {
+                probeRule["outboundTag"] = proxyTag
+            }
             routing["rules"] = [probeRule] + rules
             config["routing"] = routing
         }
@@ -776,6 +803,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     }
 
     static let probeInboundTag = "colituProbe"
+    /// The app's warm-spare balancer (lib/colitu/services/warm_spare.dart).
+    static let warmSpareBalancerTag = "proxy-auto"
     static let coreErrorLogName = "error.log"
 
     static func isQuicOutbound(_ outbound: [String: Any]) -> Bool {
@@ -2506,6 +2535,7 @@ private enum StabilityReconnectReason: String {
     case serverReset = "server_reset"
     case appWakeupHealthFailed = "app_wakeup_health_failed"
     case memoryPressure = "memory_pressure"
+    case appReload = "app_reload"
 }
 
 private enum HealthCheckResult: String {

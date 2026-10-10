@@ -39,6 +39,10 @@ class ColituVPNConfigAdapter {
   /// probe did not answer and the transport was started on rank alone.
   int lastChosenLatencyMs = -1;
 
+  /// Anonymous token of the network the attempt is made on (network
+  /// hints); sent with the protocol observations, never anything else.
+  String? networkToken;
+
   /// Transports in the order they are preferred. Hysteria2 (QUIC) keeps
   /// working on lossy links where the TCP transports stall, so it goes first,
   /// like on Windows.
@@ -50,6 +54,23 @@ class ColituVPNConfigAdapter {
     'shadowsocks': 4,
   };
 
+  /// Order key of a transport: the preferred (last-good, proven) one
+  /// first, then [transportRank]; stall marks ignored for this round
+  /// ([soft], see `colituStallMarks`) after the unmarked ones; stalled and
+  /// hinted-blocked ones ([excluded]) after every other.
+  static int transportRankFor(
+    String protocol, {
+    Set<String> excluded = const {},
+    Set<String> soft = const {},
+    String? prefer,
+  }) =>
+      (protocol == prefer ? -1 : (transportRank[protocol] ?? 5)) +
+      (excluded.contains(protocol)
+          ? 20
+          : soft.contains(protocol)
+          ? 10
+          : 0);
+
   static const _probeTimeout = Duration(milliseconds: 3000);
   static const _quicProbeTimeout = Duration(milliseconds: 3600);
 
@@ -58,6 +79,8 @@ class ColituVPNConfigAdapter {
     VPNServer? server,
     Set<String> excludeProtocols = const {},
     Set<String> skipProtocols = const {},
+    String? preferProtocol,
+    Set<String> softExcludeProtocols = const {},
   }) async {
     final rows = <CoreConfigCompanion>[];
     final name = _displayName(server, config);
@@ -75,6 +98,8 @@ class ColituVPNConfigAdapter {
           name,
           config.serverId,
           excludeProtocols,
+          preferProtocol,
+          softExcludeProtocols,
         ),
       );
     } else if (rows.isEmpty && config.outboundConfig != null) {
@@ -122,7 +147,27 @@ class ColituVPNConfigAdapter {
   Future<void> clearRuntimeConfig() async {
     await _deletePreviousRuntimeConfig();
     await PreferencesKey().clearColituSelectedServerId();
+    await PreferencesKey().clearColituWarmSpareChoice();
   }
+
+  /// The core outbound for a panel outbound (the warm spare); throws
+  /// [APIException] when the bundled core cannot run it.
+  /// `POST /client/protocol-observations` body; `network_token` only when
+  /// known for the network the attempt was made on.
+  static Map<String, dynamic> protocolObservationBody(
+    String serverId,
+    List<Map<String, dynamic>> observations,
+    String? token,
+  ) => {
+    'node_id': serverId,
+    'observations': observations,
+    if (token != null && token.isNotEmpty) 'network_token': token,
+  };
+
+  OutboundState outboundStateFor(
+    Map<String, dynamic> outboundJson,
+    String name,
+  ) => _stateFromOutboundMap(outboundJson, name);
 
   Future<List<CoreConfigCompanion>> _rowsFromText(
     String text,
@@ -172,8 +217,10 @@ class ColituVPNConfigAdapter {
     List<VPNOutboundCandidate> candidates,
     String name,
     String serverId,
-    Set<String> excludeProtocols,
-  ) async {
+    Set<String> excludeProtocols, [
+    String? preferProtocol,
+    Set<String> softExcludeProtocols = const {},
+  ]) async {
     final states = <_Candidate>[];
     final observations = <String, Map<String, dynamic>>{};
     for (final candidate in candidates) {
@@ -199,10 +246,15 @@ class ColituVPNConfigAdapter {
       );
     }
     // Transports that stalled on this network go last; if every transport is
-    // excluded the ranking still applies and the exclusion is ignored.
-    int rankOf(String protocol) =>
-        (transportRank[protocol] ?? 5) +
-        (excludeProtocols.contains(protocol) ? 10 : 0);
+    // excluded the ranking still applies and the exclusion is ignored. The
+    // transport that last carried traffic to this server on this network
+    // (Adaptive Connect memory) goes first.
+    int rankOf(String protocol) => transportRankFor(
+      protocol,
+      excluded: excludeProtocols,
+      soft: softExcludeProtocols,
+      prefer: preferProtocol,
+    );
     bool fresh(_Candidate entry) =>
         !excludeProtocols.contains(entry.candidate.protocolType);
     states.sort(
@@ -277,7 +329,11 @@ class ColituVPNConfigAdapter {
         : PingDelayConstants.unknown;
     if (serverId.isNotEmpty) {
       unawaited(
-        _reportProtocolObservations(serverId, observations.values.toList()),
+        _reportProtocolObservations(
+          serverId,
+          observations.values.toList(),
+          networkToken,
+        ),
       );
     }
     // Nothing fresh answered the probe: start the best-ranked fresh transport
@@ -347,12 +403,13 @@ class ColituVPNConfigAdapter {
   Future<void> _reportProtocolObservations(
     String serverId,
     List<Map<String, dynamic>> observations,
+    String? token,
   ) async {
     try {
       await APIClient().post<void>(
         APIEndpoint.protocolObservations,
         (_) {},
-        data: {'node_id': serverId, 'observations': observations},
+        data: protocolObservationBody(serverId, observations, token),
       );
     } catch (_) {
       // Telemetry must never prevent a VPN connection.

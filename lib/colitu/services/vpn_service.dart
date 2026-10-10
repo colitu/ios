@@ -6,15 +6,35 @@ import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
+import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
+import 'package:colitu_vpn/colitu/services/notice_service.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
 import 'package:path/path.dart' as p;
 
 /// The server list answer: the nodes and the multihop routes.
 class ServerCatalog {
-  const ServerCatalog(this.servers, [this.multihop = const []]);
+  const ServerCatalog(
+    this.servers, [
+    this.multihop = const [],
+    this.clientCountry = '',
+    this.clientNetwork = '',
+    this.hints,
+  ]);
 
   final List<VPNServer> servers;
   final List<VPNServer> multihop;
+
+  /// ISO-2 country of the request IP; empty when unknown, when the request
+  /// came through a Colitu exit (the VPN was on) or from an older panel.
+  final String clientCountry;
+
+  /// Opaque key of the user's ISP network ("TR-AS9121"), empty under the
+  /// same conditions. Only ever part of the Adaptive Connect network key.
+  final String clientNetwork;
+
+  /// `network_token` and `network_hints` for [clientNetwork]; null when the
+  /// network is unknown.
+  final ColituNetworkHints? hints;
 }
 
 class ColituVPNService {
@@ -39,9 +59,17 @@ class ColituVPNService {
           'Server is temporarily unavailable. Please try again later.',
         );
       }
+      String text(String key) {
+        final value = json is Map ? json[key] : null;
+        return value is String ? value.trim() : '';
+      }
+
       return ServerCatalog(
         servers,
         VPNServer.parseMultihop(json is Map ? json['multihop'] : null),
+        text('client_country').toUpperCase(),
+        text('client_network'),
+        ColituNetworkHints.fromServers(json, text('client_network')),
       );
     }, queryParameters: _freshQuery());
   }
@@ -113,7 +141,14 @@ class ColituVPNService {
     return Future<void>.value();
   }
 
-  Future<VPNConfig> config({String? serverId}) async {
+  /// [node] asks the panel for this node for this request only and
+  /// [exclude] names nodes it must not pick (the servers that failed during
+  /// this connect, at most 10); an older panel ignores both.
+  Future<VPNConfig> config({
+    String? serverId,
+    String? node,
+    List<String> exclude = const [],
+  }) async {
     if (serverId != null && serverId.isNotEmpty) {
       // Both calls are idempotent, so an expired access token is renewed
       // and the call repeated instead of failing the switch.
@@ -131,7 +166,11 @@ class ColituVPNService {
     return _client.get(
       APIEndpoint.vpnConfig,
       _decodeConfig,
-      queryParameters: {..._freshQuery()},
+      queryParameters: {
+        if (node != null && node.isNotEmpty) 'node': node,
+        if (exclude.isNotEmpty) 'exclude': exclude.take(10).join(','),
+        ..._freshQuery(),
+      },
     );
   }
 
@@ -172,6 +211,25 @@ class ColituVPNService {
       APIEndpoint.vpnStats,
       (json) => VPNStatsSnapshot.fromJson(json as Map<String, dynamic>),
       queryParameters: _freshQuery(),
+    );
+  }
+
+  /// `GET /client/notices`: the banners to show. An older panel answers 404,
+  /// which the caller treats as "none".
+  Future<List<ClientNotice>> notices(String language) {
+    return _client.get(
+      APIEndpoint.clientNotices,
+      parseNotices,
+      queryParameters: {'lang': language, ..._freshQuery()},
+    );
+  }
+
+  /// `POST /client/notices/{id}/events`: `seen`, `clicked` or `dismissed`.
+  Future<void> noticeEvent(String id, String event) {
+    return _client.post(
+      APIEndpoint.clientNoticeEvents(id),
+      (_) {},
+      data: {'event': event},
     );
   }
 

@@ -48,6 +48,12 @@ abstract final class APIEndpoint {
   static const vpnStatus = '/client/bootstrap';
   static const vpnStats = '/me/usage';
 
+  /// In-app notices (usage warnings, campaigns) and their seen/clicked/
+  /// dismissed events.
+  static const clientNotices = '/client/notices';
+  static String clientNoticeEvents(String id) =>
+      '/client/notices/${Uri.encodeComponent(id)}/events';
+
   static const subscription = '/billing/subscription';
 
   static const billingProducts = '/billing/catalog';

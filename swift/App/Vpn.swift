@@ -605,6 +605,25 @@ class VPNManager {
         _ = try await sendTunnelRequest(session: session, .startXray)
     }
 
+    /// Asks the running tunnel to restart only its core with the config the
+    /// app just rewrote (a warm-spare swap); the tunnel interface stays up.
+    func reloadCore() async -> Bool {
+        await refreshVpn()
+        guard let session = vpn?.connection as? NETunnelProviderSession,
+              session.status == .connected || session.status == .reasserting else {
+            return false
+        }
+        do {
+            if case .ok = try await sendTunnelRequest(session: session, .reloadCore) {
+                return true
+            }
+            return false
+        } catch {
+            YGLog("reloadCore failed: \(error)")
+            return false
+        }
+    }
+
     private func waitSessionMessageable(session: NETunnelProviderSession, timeout: TimeInterval = 10) async throws {
         let start = Date()
         while Date().timeIntervalSince(start) < timeout {

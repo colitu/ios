@@ -344,6 +344,44 @@ class ColituLoc extends ChangeNotifier {
       'Protokol yanıt vermiyor, başkası deneniyor…',
       'Protocol isn’t responding, trying another…',
     ],
+    'home.phase.switchingServer': [
+      'Пробуем другой сервер…',
+      'Başka sunucu deneniyor…',
+      'Trying another server…',
+    ],
+    'home.reconnecting': [
+      'Соединение прервалось, переподключаемся…',
+      'Bağlantı koptu, yeniden bağlanılıyor…',
+      'Connection lost, reconnecting…',
+    ],
+    'settings.warmSpare': ['Резервный канал', 'Yedek hat', 'Warm spare'],
+    'mode.simple': ['Простой режим', 'Basit mod', 'Simple mode'],
+    'err.tryFastest': [
+      'Попробовать самый быстрый сервер',
+      'En hızlı sunucuyu dene',
+      'Try the fastest server',
+    ],
+    'mode.advanced': ['Расширенный режим', 'Gelişmiş mod', 'Advanced mode'],
+    'mode.advancedHint': [
+      'Раздельное туннелирование, выбор протокола и другое',
+      'Bölünmüş tünel, protokol seçimi ve diğer ayarlar',
+      'Split tunnelling, protocol choice and more',
+    ],
+    'mode.advancedOn': [
+      'Расширенный режим включён',
+      'Gelişmiş mod açıldı',
+      'Advanced mode on',
+    ],
+    'mode.hiddenActive': [
+      'Включены расширенные настройки',
+      'Gelişmiş ayarlar etkin',
+      'Advanced settings on',
+    ],
+    'settings.warmSpareHint': [
+      'Держит второй канал наготове и за секунды переходит на него, если основной перестал работать.',
+      'İkinci bir hattı hazır tutar; ana hat çalışmazsa saniyeler içinde ona geçer.',
+      'Keeps a second line ready and moves to it within seconds if the main one stops working.',
+    ],
     'home.promo.title': [
       'Откройте весь интернет',
       'İnternetin tamamını açın',

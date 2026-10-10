@@ -32,6 +32,10 @@ class LocationsTab extends StatefulWidget {
 class _LocationsTabState extends State<LocationsTab> {
   final _search = TextEditingController();
   var _filter = 'all';
+
+  /// The category filter in use; Simple mode always shows all.
+  String get _activeFilter =>
+      widget.controller.advancedMode ? _filter : 'all';
   var _sort = _Sort.ping;
 
   /// Countries the user opened or closed by hand (country code -> open).
@@ -64,7 +68,7 @@ class _LocationsTabState extends State<LocationsTab> {
     final c = widget.controller;
     final query = _fold(_search.text.trim());
     final items = c.servers.where((server) {
-      if (!server.inCategory(_filter)) return false;
+      if (!server.inCategory(_activeFilter)) return false;
       if (query.isEmpty) return true;
       final haystack = _fold(
         '${c.titleOf(server)} ${server.displayTitle} ${server.displayCountry} ${server.city ?? ''} ${server.countryCode}',
@@ -93,7 +97,10 @@ class _LocationsTabState extends State<LocationsTab> {
 
   /// Multihop routes matching the search; they belong to no category.
   List<VPNServer> _routes() {
-    if (_filter != 'all') return const [];
+    // Simple mode lists no multihop routes.
+    if (!widget.controller.advancedMode || _activeFilter != 'all') {
+      return const [];
+    }
     final query = _fold(_search.text.trim());
     return [
       for (final route in widget.controller.multihopServers)
@@ -105,18 +112,15 @@ class _LocationsTabState extends State<LocationsTab> {
     ];
   }
 
-  /// The panel's recommended locations; without any, the three fastest.
+  /// The top of the automatic ranking among the shown servers: with the
+  /// whole list on screen it is exactly what "Fastest server" connects to.
+  /// It stays listed in its place below as well.
   List<VPNServer> _recommended(List<VPNServer> items) {
-    final c = widget.controller;
-    final flagged = items
-        .where((s) => s.isRecommended && s.isSelectable)
-        .toList();
-    if (flagged.isNotEmpty) return flagged;
-    final fastest =
-        items.where((s) => s.isSelectable && c.pingOf(s) != null).toList()
-          ..sort((a, b) => c.pingOf(a)!.compareTo(c.pingOf(b)!));
-    final keep = fastest.take(3).toSet();
-    return items.where(keep.contains).toList();
+    final shown = items.toSet();
+    final best = widget.controller.rankedServers
+        .where(shown.contains)
+        .firstOrNull;
+    return best == null ? const [] : [best];
   }
 
   Future<void> _chooseSort() async {
@@ -148,7 +152,7 @@ class _LocationsTabState extends State<LocationsTab> {
     final c = widget.controller;
     final items = _filtered();
     final recommended = _recommended(items);
-    final rest = items.where((s) => !recommended.contains(s)).toList();
+    final rest = items;
     final routes = _routes();
     final searching = _search.text.trim().isNotEmpty;
     final selectedKey = c.autoSelection ? null : c.selectedServer?.selectionKey;
@@ -253,6 +257,8 @@ class _LocationsTabState extends State<LocationsTab> {
           ),
         ),
         const SizedBox(height: 14),
+        // Simple mode: no category filters.
+        if (c.advancedMode) ...[
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           clipBehavior: Clip.none,
@@ -276,6 +282,8 @@ class _LocationsTabState extends State<LocationsTab> {
           ),
         ),
         const SizedBox(height: 18),
+        ] else
+          const SizedBox(height: 4),
         if (!c.planActive && widget.onOpenPlan != null) ...[
           ColituPanel(
             onTap: widget.onOpenPlan,
@@ -313,7 +321,7 @@ class _LocationsTabState extends State<LocationsTab> {
           _Empty(c.planRequired ? loc['plan.noneHint'] : loc['server.none'])
         else if (items.isEmpty)
           _Empty(
-            _filter != 'all' && _search.text.trim().isEmpty
+            _activeFilter != 'all' && _search.text.trim().isEmpty
                 ? loc['cat.empty']
                 : loc['locations.empty'],
           )
@@ -408,7 +416,7 @@ class _FastestButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final active = controller.autoSelection;
+    final active = controller.automaticTarget;
     return ColituPressable(
       onTap: controller.selectAuto,
       child: AnimatedContainer(

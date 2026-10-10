@@ -283,6 +283,76 @@ class PreferencesKey {
     await _prefs.setString(_colituServerPings, value);
   }
 
+  static const _colituAdaptiveMemory = "colituAdaptiveMemory";
+  static const _colituClientCountry = "colituClientCountry";
+  static const _colituClientNetwork = "colituClientNetwork";
+
+  /// Adaptive Connect per-network memory (JSON, see adaptive_connect.dart).
+  Future<String?> readColituAdaptiveMemory() =>
+      _prefs.getString(_colituAdaptiveMemory);
+
+  Future<void> saveColituAdaptiveMemory(String value) =>
+      _prefs.setString(_colituAdaptiveMemory, value);
+
+  /// Last non-empty `client_country` / `client_network` from the server list.
+  Future<String?> readColituClientCountry() =>
+      _prefs.getString(_colituClientCountry);
+
+  Future<void> saveColituClientCountry(String value) =>
+      _prefs.setString(_colituClientCountry, value);
+
+  Future<String?> readColituClientNetwork() =>
+      _prefs.getString(_colituClientNetwork);
+
+  Future<void> saveColituClientNetwork(String value) =>
+      _prefs.setString(_colituClientNetwork, value);
+
+  static const _colituAdvancedMode = "colituAdvancedMode";
+
+  /// Advanced mode (every setting shown). Stored on the first start of this
+  /// version by [resolveColituPrivacyDefault]; true when unknown.
+  Future<bool> readColituAdvancedMode() async =>
+      await _prefs.getBool(_colituAdvancedMode) ?? true;
+
+  Future<void> saveColituAdvancedMode(bool value) =>
+      _prefs.setBool(_colituAdvancedMode, value);
+
+  /// A fresh install starts in Simple mode; an install that had Colitu
+  /// state (an update) keeps what it showed: Advanced mode.
+  static bool colituAdvancedDefaultFor(
+    Iterable<String> storedKeys, {
+    required bool hasSession,
+  }) => !colituPrivacyDefaultFor(storedKeys, hasSession: hasSession);
+
+  static const _colituNetworkHints = "colituNetworkHints";
+
+  /// Network hints and token of the last known ISP network (JSON).
+  Future<String?> readColituNetworkHints() =>
+      _prefs.getString(_colituNetworkHints);
+
+  Future<void> saveColituNetworkHints(String value) =>
+      _prefs.setString(_colituNetworkHints, value);
+
+  static const _colituWarmSpare = "colituWarmSpare";
+  static const _colituWarmSpareChoice = "colituWarmSpareChoice";
+
+  /// Warm spare (a second path ready in the core); on by default.
+  Future<bool> readColituWarmSpare() async =>
+      await _prefs.getBool(_colituWarmSpare) ?? true;
+
+  Future<void> saveColituWarmSpare(bool value) =>
+      _prefs.setBool(_colituWarmSpare, value);
+
+  /// The spare chosen for the prepared config (JSON, see warm_spare.dart).
+  Future<String?> readColituWarmSpareChoice() =>
+      _prefs.getString(_colituWarmSpareChoice);
+
+  Future<void> saveColituWarmSpareChoice(String value) =>
+      _prefs.setString(_colituWarmSpareChoice, value);
+
+  Future<void> clearColituWarmSpareChoice() =>
+      _prefs.remove(_colituWarmSpareChoice);
+
   static const _colituLastDropTs = "colituLastDropTs";
 
   Future<int> readColituLastDropTs() async {
@@ -354,10 +424,18 @@ class PreferencesKey {
   /// is already stored. Call it before anything else writes a Colitu
   /// preference or reads the token store (which writes a marker preference).
   /// [hasSession] is asked only when the stored keys alone say "fresh".
+  ///
+  /// The Simple/Advanced mode default is stored from the same look at the
+  /// install: an install whose privacy mode is already stored is an update
+  /// (Advanced mode).
   Future<void> resolveColituPrivacyDefault({
     required Future<bool> Function() hasSession,
   }) async {
-    if (await _prefs.getBool(_colituPrivacyMode) != null) return;
+    final modeStored = await _prefs.getBool(_colituAdvancedMode) != null;
+    if (await _prefs.getBool(_colituPrivacyMode) != null) {
+      if (!modeStored) await saveColituAdvancedMode(true);
+      return;
+    }
     final keys = await _prefs.getKeys();
     final signedIn = keys.any((key) => key.toLowerCase().startsWith('colitu'))
         ? true
@@ -365,6 +443,11 @@ class PreferencesKey {
     await saveColituPrivacyMode(
       colituPrivacyDefaultFor(keys, hasSession: signedIn),
     );
+    if (!modeStored) {
+      await saveColituAdvancedMode(
+        colituAdvancedDefaultFor(keys, hasSession: signedIn),
+      );
+    }
   }
 
   static const _colituRuDirectNoticeShown = "colituRuDirectNoticeShown";

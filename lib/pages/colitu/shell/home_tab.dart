@@ -11,6 +11,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/colitu/theme/particles.dart';
+import 'package:colitu_vpn/pages/colitu/shell/notice_banner.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
 
 /// Connection screen, kept to one screen above the tab bar: the particle
@@ -25,6 +26,7 @@ class HomeTab extends StatelessWidget {
     required this.onOpenPlan,
     this.onOpenPrivacy,
     this.onOpenSplitTunnel,
+    this.onOpenSettings,
   });
 
   final ColituConnectionController controller;
@@ -37,6 +39,9 @@ class HomeTab extends StatelessWidget {
 
   /// Opens the split-tunneling setting (the "Split tunneling on" chip).
   final VoidCallback? onOpenSplitTunnel;
+
+  /// Opens the settings (Simple mode's "Advanced settings on" line).
+  final VoidCallback? onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +68,7 @@ class HomeTab extends StatelessWidget {
     return ShellScroll(
       onRefresh: () => c.load(showLoading: false),
       children: [
+        const NoticeBanner(),
         const SizedBox(height: 4),
         Center(
           child: ColituPowerButton(
@@ -91,7 +97,8 @@ class HomeTab extends StatelessWidget {
             ),
           ),
         ),
-        if (on && c.transport != null) ...[
+        // Simple mode: button, status, location, plan and notices only.
+        if (on && c.transport != null && c.advancedMode) ...[
           const SizedBox(height: 8),
           Center(
             child: Wrap(
@@ -109,7 +116,7 @@ class HomeTab extends StatelessWidget {
             ),
           ),
         ],
-        if (on && routeChipText(c) != null) ...[
+        if (on && routeChipText(c) != null && c.advancedMode) ...[
           const SizedBox(height: 8),
           Center(
             child: ColituStatusChip(
@@ -119,7 +126,7 @@ class HomeTab extends StatelessWidget {
             ),
           ),
         ],
-        if (c.ruDirectActive) ...[
+        if (c.ruDirectActive && c.advancedMode) ...[
           const SizedBox(height: 8),
           Center(
             child: Semantics(
@@ -135,7 +142,7 @@ class HomeTab extends StatelessWidget {
             ),
           ),
         ],
-        if (c.splitTunnelActive) ...[
+        if (c.splitTunnelActive && c.advancedMode) ...[
           const SizedBox(height: 8),
           Center(
             child: Semantics(
@@ -151,6 +158,26 @@ class HomeTab extends StatelessWidget {
             ),
           ),
         ],
+        if (c.hiddenSettingsActive) ...[
+          const SizedBox(height: 8),
+          Center(
+            child: Semantics(
+              button: true,
+              child: ColituPressable(
+                key: const ValueKey('hiddenSettingsChip'),
+                onTap: () {
+                  unawaited(c.setAdvancedMode(true));
+                  onOpenSettings?.call();
+                },
+                child: ColituStatusChip(
+                  text: loc['mode.hiddenActive'],
+                  color: ColituColors.lilac,
+                ),
+              ),
+            ),
+          ),
+        ],
+        if (c.advancedMode) ...[
         const SizedBox(height: 16),
         Row(
           children: [
@@ -173,6 +200,7 @@ class HomeTab extends StatelessWidget {
             ),
           ],
         ),
+        ],
         if (c.trialBanner != null) ...[
           const SizedBox(height: 12),
           ColituNotice(
@@ -194,7 +222,16 @@ class HomeTab extends StatelessWidget {
         ],
         if (c.error != null) ...[
           const SizedBox(height: 12),
-          ColituNotice(c.error!),
+          ColituNotice(
+            c.error!,
+            action: c.offerFastest
+                ? ColituLinkButton(
+                    key: const ValueKey('tryFastest'),
+                    label: loc['err.tryFastest'],
+                    onPressed: () => unawaited(c.tryFastest()),
+                  )
+                : null,
+          ),
         ],
         if (c.dropReport != null) ...[
           const SizedBox(height: 12),
@@ -227,6 +264,21 @@ class HomeTab extends StatelessWidget {
         _LocationCard(controller: c, onChange: onChangeLocation),
         const SizedBox(height: 12),
         _PlanCard(controller: c, onOpenPlan: onOpenPlan),
+        if (!c.advancedMode) ...[
+          const SizedBox(height: 6),
+          Center(
+            child: ColituLinkButton(
+              key: const ValueKey('advancedModeButton'),
+              label: loc['mode.advanced'],
+              icon: CupertinoIcons.slider_horizontal_3,
+              color: ColituColors.muted,
+              onPressed: () {
+                unawaited(c.setAdvancedMode(true));
+                showColituToast(context, loc['mode.advancedOn']);
+              },
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -237,6 +289,7 @@ class HomeTab extends StatelessWidget {
     ColituConnectPhase.starting => loc['home.phase.starting'],
     ColituConnectPhase.verifying => loc['home.phase.verifying'],
     ColituConnectPhase.switching => loc['home.phase.switching'],
+    ColituConnectPhase.switchingServer => loc['home.phase.switchingServer'],
     ColituConnectPhase.idle => loc['home.sub.connecting'],
   };
 
@@ -379,7 +432,7 @@ class _LocationCard extends StatelessWidget {
     final server = c.connected
         ? (c.connectedServer ?? c.effectiveServer)
         : c.effectiveServer;
-    final auto = c.autoSelection;
+    final auto = c.automaticTarget;
     final title = auto ? loc['home.fastest'] : c.serverLabel(server);
     final subtitle = auto
         ? (server == null

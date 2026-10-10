@@ -63,8 +63,10 @@ class ServerLatency {
     return !(unspecified || uniqueLocal || mapped);
   }
 
-  /// Pings of every server with a probe address, by selection key.
-  static Future<Map<String, int>> measureAll(List<VPNServer> servers) async {
+  /// Pings of every server with a probe address, by selection key; null for
+  /// a probe that timed out or could not be reached (the ranking puts a
+  /// server whose fresh ping failed last).
+  static Future<Map<String, int?>> measureAll(List<VPNServer> servers) async {
     final probes = [
       for (final server in servers)
         if ((server.host ?? '').isNotEmpty &&
@@ -76,9 +78,6 @@ class ServerLatency {
           ).then((ms) => MapEntry(server.selectionKey, ms)),
     ];
     final results = await Future.wait(probes);
-    return {
-      for (final entry in results)
-        if (entry.value != null) entry.key: entry.value!,
-    };
+    return {for (final entry in results) entry.key: entry.value};
   }
 }

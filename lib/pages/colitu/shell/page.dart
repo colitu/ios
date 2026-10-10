@@ -202,6 +202,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
                 _select(ColituTab.account, focusPrivacy: true),
             onOpenSplitTunnel: () =>
                 ColituSplitTunnelPage.open(context, _controller),
+            onOpenSettings: () => _select(ColituTab.account),
           ),
           ColituTab.locations => LocationsTab(
             controller: _controller,

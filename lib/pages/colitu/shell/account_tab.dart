@@ -234,6 +234,16 @@ class _AccountTabState extends State<AccountTab> {
       children: [
         Text(loc['account.title'], style: ColituText.h1),
         const SizedBox(height: 14),
+        // One tap between Simple and Advanced mode, first on the screen.
+        ColituSwitchRow(
+          key: const ValueKey('advancedModeSwitch'),
+          icon: CupertinoIcons.slider_horizontal_3,
+          title: loc['mode.advanced'],
+          hint: loc['mode.advancedHint'],
+          value: c.advancedMode,
+          onChanged: c.setAdvancedMode,
+        ),
+        const SizedBox(height: 10),
         // Profile
         ColituPanel(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
@@ -333,6 +343,8 @@ class _AccountTabState extends State<AccountTab> {
           value: c.autoConnect,
           onChanged: c.setAutoConnect,
         ),
+        // Hidden in Simple mode (they keep their stored values).
+        if (c.advancedMode) ...[
         if (ColituAdBlock.available) ...[
           const SizedBox(height: 8),
           ColituSwitchRow(
@@ -376,6 +388,15 @@ class _AccountTabState extends State<AccountTab> {
           onChanged: c.setStrictKillSwitch,
         ),
         const SizedBox(height: 8),
+        ColituSwitchRow(
+          key: const ValueKey('warmSpare'),
+          icon: CupertinoIcons.antenna_radiowaves_left_right,
+          title: loc['settings.warmSpare'],
+          hint: loc['settings.warmSpareHint'],
+          value: c.warmSpare,
+          onChanged: c.setWarmSpare,
+        ),
+        const SizedBox(height: 8),
         ColituActionRow(
           key: const ValueKey('splitTunnelRow'),
           icon: CupertinoIcons.arrow_branch,
@@ -395,6 +416,8 @@ class _AccountTabState extends State<AccountTab> {
           ),
           const SizedBox(height: 8),
         ],
+        ],
+        if (!c.advancedMode) const SizedBox(height: 8),
         ColituActionRow(
           key: const ValueKey('mfaSetupRow'),
           icon: CupertinoIcons.lock_shield,
@@ -410,6 +433,7 @@ class _AccountTabState extends State<AccountTab> {
             mode: LaunchMode.externalApplication,
           ),
         ),
+        if (c.advancedMode) ...[
         const SizedBox(height: 8),
         ColituActionRow(
           key: const ValueKey('manualConfigRow'),
@@ -438,18 +462,21 @@ class _AccountTabState extends State<AccountTab> {
             color: ColituColors.success,
           ),
         ),
+        ],
         const SizedBox(height: 18),
         // Connection
         _SectionTitle(loc['account.connection']),
-        ColituActionRow(
-          icon: CupertinoIcons.antenna_radiowaves_left_right,
-          title: loc['account.protocol'],
-          hint: c.connected && c.transport != null
-              ? '${loc['account.protocolAuto']} · ${c.transportName}'
-              : loc['account.protocolAuto'],
-          trailing: const SizedBox.shrink(),
-        ),
-        const SizedBox(height: 8),
+        if (c.advancedMode) ...[
+          ColituActionRow(
+            icon: CupertinoIcons.antenna_radiowaves_left_right,
+            title: loc['account.protocol'],
+            hint: c.connected && c.transport != null
+                ? '${loc['account.protocolAuto']} · ${c.transportName}'
+                : loc['account.protocolAuto'],
+            trailing: const SizedBox.shrink(),
+          ),
+          const SizedBox(height: 8),
+        ],
         ColituTile(
           padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
           child: Column(
@@ -544,13 +571,17 @@ class _AccountTabState extends State<AccountTab> {
           title: loc['account.mail'],
           onTap: _mail,
         ),
-        const SizedBox(height: 8),
-        ColituActionRow(
-          icon: CupertinoIcons.doc_on_clipboard,
-          title: loc['account.diagnostics'],
-          hint: loc['account.diagnosticsHint'],
-          onTap: _shareDiagnostics,
-        ),
+        // Support can still ask for diagnostics in Simple mode (support
+        // screen); the row itself is advanced.
+        if (c.advancedMode) ...[
+          const SizedBox(height: 8),
+          ColituActionRow(
+            icon: CupertinoIcons.doc_on_clipboard,
+            title: loc['account.diagnostics'],
+            hint: loc['account.diagnosticsHint'],
+            onTap: _shareDiagnostics,
+          ),
+        ],
         const SizedBox(height: 8),
         ColituActionRow(
           icon: CupertinoIcons.doc_text,

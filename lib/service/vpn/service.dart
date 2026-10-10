@@ -5,11 +5,14 @@ import 'dart:io';
 import 'package:duration/duration.dart';
 import 'package:duration/locale.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:colitu_vpn/core/tools/platform.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
+import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
+import 'package:colitu_vpn/colitu/services/warm_spare.dart';
 import 'package:colitu_vpn/core/constants/preferences.dart';
 import 'package:colitu_vpn/core/db/database/constants.dart';
 import 'package:colitu_vpn/core/db/database/database.dart';
@@ -484,9 +487,21 @@ final class VpnService {
   ) async {
     final settingState = await XraySettingStateReader.loadFromDb();
 
-    final outboundState = OutboundState();
-    outboundState.readFromDbData(config);
+    // Warm spare plan: after a role swap its primary replaces the prepared
+    // one; the spare is a second outbound right after the primary, written
+    // with the same settings; the balancer is added to the finished config.
+    // It needs the two loopback check inbounds (free ports), or there is
+    // none.
+    ColituVerifyProxy.current = null;
+    ColituVerifyProxy.currentSpare = null;
+    final plan = await _warmSparePlan(config);
+    final outboundState =
+        _planPrimary(plan, config) ?? (OutboundState()..readFromDbData(config));
     settingState.outbounds.outbounds.add(outboundState);
+    var spare = _planSpare(plan, config);
+    final checks = spare == null ? null : await _verifyProxies();
+    if (checks == null) spare = null;
+    if (spare != null) settingState.outbounds.outbounds.add(spare);
 
     await settingState.fixSetting(tunSettingState, port);
     _hardenDnsLeakProtection(settingState);
@@ -494,8 +509,121 @@ final class VpnService {
       ColituAdBlock.applyTo(settingState);
     }
     final xrayJson = settingState.xrayJson;
+    if (spare != null) {
+      final json =
+          jsonDecode(jsonEncode(xrayJson.toJson())) as Map<String, dynamic>;
+      if (ColituWarmSpare.applyTo(
+        json,
+        verify: checks!.primary,
+        verifySpare: checks.spare,
+      )) {
+        final configPath = XrayStateConstants.configFilePath;
+        await File(configPath).writeAsString(
+          JsonTool.encodeJsonToSortedString(json, JsonTool.encoderForFile),
+        );
+        ColituVerifyProxy.current = checks.primary;
+        ColituVerifyProxy.currentSpare = checks.spare;
+        return configPath;
+      }
+    }
     final configPath = await xrayJson.writeConfig(runDir);
     return configPath;
+  }
+
+  Future<({ColituVerifyProxy primary, ColituVerifyProxy spare})?>
+  _verifyProxies() async {
+    try {
+      final ports = await AppHostApi().getFreePorts(2);
+      if (ports.length < 2) return null;
+      return (
+        primary: ColituVerifyProxy.random(ports[0]),
+        spare: ColituVerifyProxy.random(ports[1]),
+      );
+    } catch (e) {
+      ygLogger("verify inbound ports: $e");
+      return null;
+    }
+  }
+
+  /// The plan stored for this prepared config while the setting is on;
+  /// null (single outbound, as before) otherwise or when it cannot be read.
+  Future<ColituSpareChoice?> _warmSparePlan(CoreConfigData config) async {
+    try {
+      // Simple mode keeps the warm spare on.
+      if (!await PreferencesKey().readColituWarmSpare() &&
+          await PreferencesKey().readColituAdvancedMode()) {
+        return null;
+      }
+      final raw = await PreferencesKey().readColituWarmSpareChoice();
+      if (raw == null || raw.isEmpty) return null;
+      final choice = ColituSpareChoice.fromJson(jsonDecode(raw));
+      if (choice == null || choice.configId != config.id) return null;
+      return choice;
+    } catch (e) {
+      ygLogger("warm spare skipped: $e");
+      return null;
+    }
+  }
+
+  /// The swapped-in primary of [plan] (tag `proxy`); null keeps the
+  /// prepared one.
+  OutboundState? _planPrimary(ColituSpareChoice? plan, CoreConfigData config) {
+    final primary = plan?.primary;
+    if (primary == null) return null;
+    try {
+      return ColituVPNConfigAdapter().outboundStateFor(
+        primary.outbound,
+        config.name,
+      )..tag = ColituWarmSpare.primaryTag;
+    } catch (e) {
+      ygLogger("warm spare primary skipped: $e");
+      return null;
+    }
+  }
+
+  OutboundState? _planSpare(ColituSpareChoice? plan, CoreConfigData config) {
+    if (plan == null || !plan.hasSpare) return null;
+    try {
+      return ColituVPNConfigAdapter().outboundStateFor(
+        plan.outbound,
+        config.name,
+      )..tag = ColituWarmSpare.spareTag;
+    } catch (e) {
+      ygLogger("warm spare skipped: $e");
+      return null;
+    }
+  }
+
+  static const _tunnelChannel = MethodChannel('colitu/tunnel');
+
+  /// Rewrites the running core config (a warm-spare swap) and has the
+  /// tunnel restart only its core: the tunnel interface, its routes and DNS
+  /// stay, the core's connections are dropped and reopened (about a second
+  /// without traffic). False when that is not possible; the caller then
+  /// restarts the tunnel.
+  Future<bool> reloadCore() async {
+    final configId = AppEventBus.instance.state.runningId;
+    if (configId == DBConstants.defaultId || !_vpnRunning) return false;
+    try {
+      final config = await AppDatabase().coreConfigDao.searchRow(configId);
+      if (config == null) return false;
+      final ports = await XrayPorts.getPorts();
+      if (ports == null) return false;
+      final tunSettingState = TunSettingState();
+      await tunSettingState.readFromPreferences();
+      await _applyConnectionProtectionPreference(tunSettingState);
+      ColituRuBypass.privacyMode = await PreferencesKey().readColituPrivacyMode();
+      await _writeXrayUIConfig(
+        config,
+        tunSettingState,
+        ports,
+        VpnConstants.runDir,
+      );
+      return await _tunnelChannel.invokeMethod<bool>('reloadCore') ?? false;
+    } catch (e) {
+      ygLogger("core reload failed: $e");
+      return false;
+    }
   }
 
   void _hardenDnsLeakProtection(XraySettingState settingState) {

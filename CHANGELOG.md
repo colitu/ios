@@ -4,6 +4,26 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
+## 5.7.0
+
+- Adaptive Connect 2.0. "Fastest server" now really is the fastest: the app
+  ranks servers by measured ping, puts other countries before your own and
+  remembers what worked on each network (home Wi-Fi and mobile data
+  separately). Protocols that most users on your network can't use are
+  tried last.
+- Warm spare: while connected, a second path on another server is kept
+  ready. If the main path stops working, traffic moves to it within seconds
+  and the VPN stays on. The spare is checked in the background and replaced
+  if it stops answering.
+- The best two paths are tried at the same time when connecting, and in
+  automatic mode the app moves on to the next server when one doesn't work.
+  A manually chosen server that fails offers "Try the fastest server".
+- The connection is watched on every protocol; the app reconnects by itself
+  after an unexpected drop.
+- Simple mode and Advanced mode: new installations start in Simple mode;
+  one tap shows split tunnelling, protocols and the other settings.
+- In-app messages for quota warnings and announcements.
+
 ## 5.6.0
 
 - Calls on the Fast connection hold up better: on servers that support it,
