@@ -69,6 +69,19 @@ void main() {
         s.id,
     ];
 
+    test('Russian servers are never picked, wherever the user is', () {
+      final ru = _server('ru', 'RU');
+      final memory = ColituAdaptiveMemory()..recordSuccess(wifi, 'ru', 'trojan', now);
+      for (final country in ['RU', 'TR', null]) {
+        expect(
+          rank([ru, de, nl], memory: memory, country: country),
+          ['de', 'nl'],
+        );
+      }
+      expect(rank([ru]), isEmpty);
+      expect(autoExcluded(ru), isTrue);
+    });
+
     test('without pings or memory the panel order stays', () {
       expect(rank(panel), ['de', 'nl', 'tr', 'fi']);
     });

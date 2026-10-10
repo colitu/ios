@@ -551,9 +551,17 @@ class ColituNetworkHints {
   return (hard: marked, soft: <String>{});
 }
 
+/// Server countries the automatic mode never picks: a Russian exit carries
+/// the same blocks the user wants to get away from, wherever the user is.
+/// A manual choice still connects there.
+const kAutoExcludedCountries = <String>{'RU'};
+
+bool autoExcluded(VPNServer server) =>
+    kAutoExcludedCountries.contains(server.countryCode.trim().toUpperCase());
+
 /// Order in which the automatic mode tries servers. [servers] come in panel
-/// order (best-first for this user); multihop routes and servers that
-/// cannot be selected are left out.
+/// order (best-first for this user); multihop routes, servers that cannot be
+/// selected and those in [kAutoExcludedCountries] are left out.
 ///
 /// 1. penalized on this network: last
 /// 2. fresh failed ping: after everything else but the penalized
@@ -577,7 +585,7 @@ List<VPNServer> rankServers(
   final rows = <({VPNServer server, int bucket, bool last, int? ms, int index})>[];
   var index = 0;
   for (final server in servers) {
-    if (server.isMultihop || !server.isSelectable) continue;
+    if (server.isMultihop || !server.isSelectable || autoExcluded(server)) continue;
     final key = server.selectionKey;
     final ping = pings[key];
     final fresh = ping != null && ping.isFresh(network, now) ? ping : null;

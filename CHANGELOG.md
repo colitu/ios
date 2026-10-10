@@ -4,6 +4,12 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
+## 5.8.1
+
+- Automatic server choice (Adaptive Connect) never picks a server in Russia:
+  a Russian exit carries the same blocks the user wants to get away from.
+  A server in Russia can still be chosen by hand.
+
 ## 5.8.0
 
 - The Colitu API and its mirrors are reached only over certificates that
