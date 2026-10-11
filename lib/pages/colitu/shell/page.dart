@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
+import 'package:colitu_vpn/colitu/services/colitu_survey.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/paused/page.dart';
@@ -16,6 +17,7 @@ import 'package:colitu_vpn/pages/colitu/shell/locations_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/plan_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/support_tab.dart';
 import 'package:colitu_vpn/pages/colitu/split_tunnel/page.dart';
+import 'package:colitu_vpn/pages/colitu/survey/survey_sheet.dart';
 import 'package:colitu_vpn/pages/main/url.dart';
 
 enum ColituTab { home, locations, plan, support, account }
@@ -37,6 +39,9 @@ class _ColituShellPageState extends State<ColituShellPage> {
   late ColituTab _tab = widget.initialTab;
   String? _shownNotice;
   var _sessionEnded = false;
+
+  /// The once-a-day survey check ran in this shell.
+  var _surveyChecked = false;
 
   /// The account tab opens scrolled to the privacy mode switch.
   var _focusPrivacy = false;
@@ -69,11 +74,27 @@ class _ColituShellPageState extends State<ColituShellPage> {
       showColituToast(context, notice);
     }
     if (notice == null) _shownNotice = null;
+    if (!_surveyChecked &&
+        mounted &&
+        !_controller.loading &&
+        !_controller.busy &&
+        _controller.paused == null) {
+      _surveyChecked = true;
+      unawaited(_maybeShowSurvey());
+    }
     if (_controller.ruDirectNoticePending &&
         mounted &&
         _controller.takeRuDirectNotice()) {
       unawaited(_showRuDirectNotice());
     }
+  }
+
+  /// At most one survey a day after sign-in, never while connecting and
+  /// never with "Show surveys" off (the service checks the setting).
+  Future<void> _maybeShowSurvey() async {
+    final survey = await ColituSurveys.instance.checkNow();
+    if (survey == null || !mounted || _controller.busy) return;
+    await showColituSurveySheet(context, survey);
   }
 
   /// One-time explanation, the first time a connection sends Russian

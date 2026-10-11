@@ -4,6 +4,18 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
+## 5.9.0
+
+- Automatic mode picks the fastest measured server: a manual pick is no longer
+  remembered as this network's good server, and a remembered server gives way
+  to one at least 40% and 60 ms faster. Own-country servers are pushed back
+  only in censoring countries.
+- Invite a friend: invite screen with link, share and results; optional
+  invite code at sign-up (signups labelled app:ios).
+- Anonymous usage statistics (on by default, can be turned off): aggregate
+  counters and connection events, no account, device, IP or visited site.
+- In-app surveys (at most one in 30 days, can be turned off).
+
 ## 5.8.1
 
 - Automatic server choice (Adaptive Connect) never picks a server in Russia:

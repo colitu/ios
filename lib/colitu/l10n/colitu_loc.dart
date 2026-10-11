@@ -1602,6 +1602,257 @@ class ColituLoc extends ChangeNotifier {
       'Diğer uygulamalar ve cihazlar için bilgiler — colitu.com\'da.',
       'Details for other apps and devices, on colitu.com.',
     ],
+    // Invites, anonymous statistics and surveys
+    'invite.have': [
+      'У меня есть код приглашения',
+      'Davet kodum var',
+      'I have an invite code',
+    ],
+    'invite.field': [
+      'Код приглашения',
+      'Davet kodu',
+      'Invite code',
+    ],
+    'invite.fieldHint': [
+      'Код или ссылка colitu.com/r/…',
+      'Kod veya colitu.com/r/… bağlantısı',
+      'Code or colitu.com/r/… link',
+    ],
+    'invite.came': [
+      'Вы пришли по приглашению: 7 дней Premium после подтверждения e-mail',
+      'Davetle geldiniz: e-postanızı doğrulayınca 7 gün Premium',
+      'You came with an invite: 7 days of Premium once you verify your e-mail',
+    ],
+    'invite.kicker': [
+      'ПРИГЛАШЕНИЕ',
+      'DAVET',
+      'INVITE',
+    ],
+    'invite.title': [
+      'Пригласить друга',
+      'Arkadaşını davet et',
+      'Invite a friend',
+    ],
+    'invite.rowHint': [
+      'Друг получит Premium, вы тоже',
+      'Arkadaşın Premium kazanır, sen de',
+      'Your friend gets Premium, and so do you',
+    ],
+    'invite.sub': [
+      'Поделитесь ссылкой: когда друг создаст аккаунт, дни Premium получите вы оба.',
+      'Bağlantını paylaş: arkadaşın hesap açınca ikiniz de Premium günü kazanırsınız.',
+      'Share your link: when a friend opens an account, you both get Premium days.',
+    ],
+    'invite.link': [
+      'Ваша ссылка-приглашение',
+      'Davet bağlantın',
+      'Your invite link',
+    ],
+    'invite.copy': [
+      'Копировать',
+      'Kopyala',
+      'Copy',
+    ],
+    'invite.copied': [
+      'Ссылка скопирована',
+      'Bağlantı kopyalandı',
+      'Link copied',
+    ],
+    'invite.share': [
+      'Поделиться',
+      'Paylaş',
+      'Share',
+    ],
+    'invite.shareText': [
+      'Я пользуюсь Colitu; создай аккаунт по этой ссылке и получи {days} Premium в подарок.',
+      'Colitu\'yu deniyorum; bu bağlantıyla hesap açarsan {days} Premium hediye.',
+      'I\'m trying Colitu; open an account with this link and get {days} of Premium as a gift.',
+    ],
+    'invite.stat.invited': [
+      'Приглашено',
+      'Davet edilen',
+      'Invited',
+    ],
+    'invite.stat.valid': [
+      'Засчитанные приглашения',
+      'Geçerli davet',
+      'Valid invites',
+    ],
+    'invite.stat.pending': [
+      'ожидают: {n}',
+      '{n} bekliyor',
+      '{n} pending',
+    ],
+    'invite.stat.earned': [
+      'Заработанный Premium',
+      'Kazanılan Premium',
+      'Premium earned',
+    ],
+    'invite.stat.left': [
+      'Наград в этом месяце осталось',
+      'Bu ay kalan ödül',
+      'Rewards left this month',
+    ],
+    'invite.rules': [
+      'Как это работает',
+      'Nasıl çalışır?',
+      'How it works',
+    ],
+    'invite.rule1': [
+      'Друг получает {days} Premium после подтверждения e-mail.',
+      'Arkadaşın e-postasını doğruladığında {days} Premium alır.',
+      'Your friend gets {days} of Premium after verifying their e-mail.',
+    ],
+    'invite.rule2': [
+      'Вы получаете {days} Premium, когда друг впервые подключится и сохранит аккаунт 24 часа.',
+      'Arkadaşın ilk kez bağlanıp hesabını 24 saat tuttuğunda sen {days} Premium kazanırsın.',
+      'You get {days} of Premium when your friend connects for the first time and keeps the account for 24 hours.',
+    ],
+    'invite.rule3': [
+      'Не более {cap} наград в месяц; дни добавляются после текущего Premium.',
+      'Ayda en fazla {cap} ödül; günler mevcut Premium süresinin sonuna eklenir.',
+      'At most {cap} rewards a month; the days are added after your current Premium.',
+    ],
+    'invite.rule4': [
+      'Та же сеть или устройство и временные e-mail не засчитываются.',
+      'Aynı ağ veya cihaz ve geçici e-postalar sayılmaz.',
+      'The same network or device and temporary e-mails do not count.',
+    ],
+    'invite.disabled': [
+      'Программа приглашений сейчас отключена.',
+      'Davet programı şu anda kapalı.',
+      'The invite programme is switched off right now.',
+    ],
+    'stats.title': [
+      'Анонимная статистика использования',
+      'Anonim kullanım istatistikleri',
+      'Anonymous usage statistics',
+    ],
+    'stats.hint': [
+      'Отправляются только суммарные числа (успешность подключений, время, используемые функции); аккаунт, устройство, IP и посещённые сайты не отправляются.',
+      'Yalnızca toplu sayılar (bağlantı başarısı, süreler, kullanılan özellikler) gönderilir; hesap, cihaz, IP veya ziyaret edilen siteler gönderilmez.',
+      'Only aggregate numbers (connection success, timings, features used) are sent; your account, device, IP address or visited sites are never sent.',
+    ],
+    'surveys.title': [
+      'Показывать опросы',
+      'Anketleri göster',
+      'Show surveys',
+    ],
+    'surveys.hint': [
+      'Иногда мы задаём один короткий вопрос.',
+      'Ara sıra tek bir kısa soru sorarız.',
+      'Now and then we ask one short question.',
+    ],
+    'survey.csat': [
+      'Как был решён ваш запрос в поддержку?',
+      'Destek talebiniz nasıl çözüldü?',
+      'How was your support request resolved?',
+    ],
+    'survey.nps': [
+      'Насколько вероятно, что вы порекомендуете Colitu другу?',
+      'Colitu\'yu bir arkadaşınıza önerme olasılığınız nedir?',
+      'How likely are you to recommend Colitu to a friend?',
+    ],
+    'survey.pmf': [
+      'Что бы вы почувствовали, если бы больше не могли пользоваться Colitu?',
+      'Colitu\'yu artık kullanamasaydınız ne hissederdiniz?',
+      'How would you feel if you could no longer use Colitu?',
+    ],
+    'survey.churn': [
+      'Почему вы не продлили Premium?',
+      'Premium\'u neden yenilemediniz?',
+      'Why did you not renew Premium?',
+    ],
+    'survey.csat.low': [
+      'Плохо',
+      'Kötü',
+      'Poor',
+    ],
+    'survey.csat.high': [
+      'Отлично',
+      'Harika',
+      'Great',
+    ],
+    'survey.nps.low': [
+      'Совсем не вероятно',
+      'Hiç olası değil',
+      'Not at all likely',
+    ],
+    'survey.nps.high': [
+      'Очень вероятно',
+      'Çok olası',
+      'Extremely likely',
+    ],
+    'survey.pmf.very': [
+      'Очень расстроился бы',
+      'Çok üzülürdüm',
+      'Very disappointed',
+    ],
+    'survey.pmf.somewhat': [
+      'Немного расстроился бы',
+      'Biraz üzülürdüm',
+      'Somewhat disappointed',
+    ],
+    'survey.pmf.not': [
+      'Не расстроился бы',
+      'Üzülmezdim',
+      'Not disappointed',
+    ],
+    'survey.churn.price': [
+      'Цена',
+      'Fiyat',
+      'Price',
+    ],
+    'survey.churn.speed': [
+      'Скорость',
+      'Hız',
+      'Speed',
+    ],
+    'survey.churn.blocked': [
+      'Некоторые сайты или приложения не открывались',
+      'Bazı siteler veya uygulamalar açılmadı',
+      'Some sites or apps did not open',
+    ],
+    'survey.churn.not_needed': [
+      'Больше не нужно',
+      'Artık gerekmiyor',
+      'I do not need it any more',
+    ],
+    'survey.churn.other_vpn': [
+      'Использую другой VPN',
+      'Başka VPN kullanıyorum',
+      'I use another VPN',
+    ],
+    'survey.churn.technical': [
+      'Технические проблемы',
+      'Teknik sorunlar',
+      'Technical problems',
+    ],
+    'survey.churn.other': [
+      'Другое',
+      'Diğer',
+      'Other',
+    ],
+    'survey.comment': [
+      'Комментарий (необязательно)',
+      'Yorumunuz (isteğe bağlı)',
+      'Comment (optional)',
+    ],
+    'survey.send': [
+      'Отправить',
+      'Gönder',
+      'Send',
+    ],
+    'survey.close': [
+      'Закрыть',
+      'Kapat',
+      'Close',
+    ],
+    'survey.thanks': [
+      'Спасибо за ответ!',
+      'Yanıtınız için teşekkürler!',
+      'Thanks for your answer!',
+    ],
   };
 
   static const _countries = <String, List<String>>{

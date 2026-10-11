@@ -51,13 +51,20 @@ class ColituStallWatch {
   DateTime? _lastCheck;
   DateTime? _lastSwitch;
   int? _lastDownBytes;
+  DateTime? _firstFailureAt;
+  DateTime? _detectedSince;
 
   int get failures => _failures;
+
+  /// When the run of failed checks that made the last [finish] return true
+  /// began (the statistics' detection time); null before any switch.
+  DateTime? get detectedSince => _detectedSince;
 
   /// A new session (or none): the count and the clock start again. The time
   /// of the last automatic switch is kept, so the cooldown spans sessions.
   void reset(DateTime now) {
     _failures = 0;
+    _firstFailureAt = null;
     _probing = false;
     _lastCheck = now;
     _lastDownBytes = null;
@@ -93,13 +100,17 @@ class ColituStallWatch {
     _probing = false;
     if (ok || !hasNetwork) {
       _failures = 0;
+      _firstFailureAt = null;
       return false;
     }
     _failures++;
+    _firstFailureAt ??= now;
     if (_failures < (threshold ?? failuresToSwitch)) return false;
     final last = _lastSwitch;
     if (last != null && now.difference(last) < switchCooldown) return false;
     _failures = 0;
+    _detectedSince = _firstFailureAt;
+    _firstFailureAt = null;
     _lastSwitch = now;
     return true;
   }

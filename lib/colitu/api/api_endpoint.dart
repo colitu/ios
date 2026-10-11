@@ -57,6 +57,15 @@ abstract final class APIEndpoint {
   static String clientNoticeEvents(String id) =>
       '/client/notices/${Uri.encodeComponent(id)}/events';
 
+  /// Invite (referral) screen data.
+  static const referral = '/referral';
+
+  /// Anonymous usage statistics, Adaptive Connect events and the in-app
+  /// survey.
+  static const clientMetrics = '/client/metrics';
+  static const clientAcEvents = '/client/ac-events';
+  static const clientSurvey = '/client/survey';
+
   static const subscription = '/billing/subscription';
 
   static const billingProducts = '/billing/catalog';

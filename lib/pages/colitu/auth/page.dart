@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +11,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/auth_service.dart';
+import 'package:colitu_vpn/colitu/services/colitu_referral.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/colitu/theme/particles.dart';
 import 'package:colitu_vpn/pages/colitu/auth/reset_panel.dart';
@@ -34,6 +37,11 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _repeat = TextEditingController();
+  final _invite = TextEditingController();
+  // The "I have an invite code" link reveals the optional field.
+  var _inviteOpen = false;
+  // A code from an opened invite link, kept until the account is created.
+  String? _pendingInvite;
   late var _mode = widget.register ? _AuthMode.register : _AuthMode.login;
   var _loading = false;
   var _showPassword = false;
@@ -50,6 +58,22 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
   void initState() {
     super.initState();
     _message = widget.initialMessage;
+    unawaited(_loadPendingInvite());
+  }
+
+  Future<void> _loadPendingInvite() async {
+    final code = await ColituInvite.pending();
+    if (mounted && code != null) setState(() => _pendingInvite = code);
+  }
+
+  /// A pasted invite link becomes its code; typed text is cleaned up.
+  void _inviteChanged(String text) {
+    final clean = ColituInvite.fromInput(text);
+    if (clean == text) return;
+    _invite.value = TextEditingValue(
+      text: clean,
+      selection: TextSelection.collapsed(offset: clean.length),
+    );
   }
 
   @override
@@ -57,6 +81,7 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
     _email.dispose();
     _password.dispose();
     _repeat.dispose();
+    _invite.dispose();
     super.dispose();
   }
 
@@ -96,9 +121,14 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
     try {
       final email = _email.text.trim();
       if (_mode == _AuthMode.register) {
+        // The typed (or pasted) code wins over one from an invite link.
+        final invite =
+            ColituInvite.normalize(ColituInvite.fromInput(_invite.text)) ??
+            _pendingInvite;
         await AppSession.instance.register(
-          RegisterRequest(email: email, password: _password.text),
+          RegisterRequest(email: email, password: _password.text, invite: invite),
         );
+        await ColituInvite.keepPending(null);
       } else {
         await AppSession.instance.login(
           LoginRequest(email: email, password: _password.text),
@@ -315,6 +345,35 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
                         enabled: !_loading,
                         onSubmitted: (_) => _submit(),
                       ),
+                      if (_pendingInvite != null) ...[
+                        const SizedBox(height: 14),
+                        ColituNotice(loc['invite.came'], error: false),
+                      ],
+                      if (_inviteOpen) ...[
+                        const SizedBox(height: 14),
+                        ColituField(
+                          key: const ValueKey('inviteField'),
+                          controller: _invite,
+                          label: loc['invite.field'],
+                          hint: loc['invite.fieldHint'],
+                          textInputAction: TextInputAction.done,
+                          autocorrect: false,
+                          prefixIcon: CupertinoIcons.gift,
+                          enabled: !_loading,
+                          maxLength: 120,
+                          onChanged: _inviteChanged,
+                        ),
+                      ] else
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: ColituLinkButton(
+                            key: const ValueKey('inviteToggle'),
+                            label: loc['invite.have'],
+                            onPressed: _loading
+                                ? null
+                                : () => setState(() => _inviteOpen = true),
+                          ),
+                        ),
                       const SizedBox(height: 16),
                       ColituCheck(
                         value: _acceptTerms,

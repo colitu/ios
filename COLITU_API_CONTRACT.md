@@ -20,7 +20,7 @@ rejects unknown request fields. Errors use:
 
 | Route | Body | Response |
 |---|---|---|
-| `POST /auth/register` | `{ "email", "password" }` | `201` tokens |
+| `POST /auth/register` | `{ "email", "password", "locale", "source": "app:ios", "invite"? }` (`invite`: 6-12 characters A-Z0-9, upper case, left out when empty) | `201` tokens |
 | `POST /auth/login` | `{ "email", "password" }` | `200` tokens |
 | `POST /auth/refresh` | `{ "refresh_token" }` + `X-Device-ID` header | `200` tokens |
 | `POST /auth/logout` | `{ "refresh_token" }` | `204` |
@@ -96,6 +96,66 @@ Registration requires an active entitlement (new accounts get the free plan:
 `GET /billing/catalog`, `GET /billing/payment-methods`, `POST /billing/quote`,
 `POST /billing/checkout` (opens the hosted Platega page), `GET /billing/orders/{id}`
 (the only source of payment success) and `GET /billing/subscription`.
+
+## Invites, anonymous statistics and surveys
+
+All of these use the signed-in client (Bearer, `X-Device-ID`). None of them
+blocks a connect or a sign-up; every failure is ignored.
+
+- `GET /referral` — `{ "data": { code, link, enabled, invitee_days, reward_days,
+  monthly_cap, invited, pending, rewarded, rejected, days_earned,
+  rewarded_this_month, recent: [{ status, reason?, days, created_at }] } }`.
+  The invite screen (Account, "Invite a friend") shows the link with Copy and
+  Share, four counters (invited; valid invites with "N pending"; Premium days
+  earned; rewards left this month = `monthly_cap - rewarded_this_month`) and the
+  rules. `recent` is not shown (no invitee names). The register screen has an
+  optional "I have an invite code" field; a pasted `https://colitu.com/r/CODE`
+  link is reduced to `CODE`. An invite link opened in the app
+  (`/r/:code` route, `ColituInvite.handleLink`) keeps the code until sign-up.
+- `POST /client/metrics` (at most every 6 h, only with "Anonymous usage
+  statistics" on) — `{ "platform": "ios", "app_version", "counters": {non-zero
+  of connect_attempts, connect_successes, first_connect_attempts,
+  first_connect_successes, sessions, unexpected_disconnects, functional_checks,
+  functional_ok, recoveries, recovery_successes, protocol_switches,
+  protocol_switch_successes, flaps}, "histograms": {"connect_ms" |
+  "recovery_ms" | "detection_ms": [9 ints]}, "kill_switch": bool, "features":
+  [split_tunnel, shield, ad_block, advanced_mode, multihop, auto_connect,
+  kill_switch, manual_server (custom_dns is never sent: iOS has none)] }`.
+  Histogram bucket upper bounds in ms: 500, 1000, 2000, 3000, 5000, 8000, 15000,
+  30000, and a last open bucket. Each counter is capped at 10000. `202` (or any
+  2xx) and `400` clear what was sent; `429`, `5xx` and no answer keep it.
+- `POST /client/ac-events` (at most hourly, <= 300 events per request of one
+  network, queue capped at 1000 with the oldest dropped) — `{ "platform":
+  "ios", "app_version", "network_token", "network_type": "wifi" | "cellular" |
+  "ethernet" | "other" | "", "events": [...] }`. `network_token` is the token of
+  the last `GET /servers` made while the VPN was off (the one the protocol
+  observations use), empty when none. Same answers as `/client/metrics`.
+  Event kinds (`node_id` lower-case UUID of the server list, `protocol` one of
+  vless-reality, vless-xhttp, hysteria2, trojan, shadowsocks, tuic, `ms` 0-600000):
+  `connect {node_id, protocol, outcome ok|fail, reason?, ms, first_try, mode
+  auto|manual}` (one per connect flow, auto and manual), `recovery {node_id,
+  protocol, to_protocol?, outcome, reason?, ms, detect_ms?, spare}`,
+  `switch {protocol, to_protocol?, outcome, flap}`, `drop {node_id, protocol,
+  reason, minutes}`, `probe {node_id, outcome, ms?}` (last per node per hour),
+  `choice {node_id, ms, best_node_id, best_ms, mode: "auto"}` (once per automatic
+  choice). Reasons: timeout, reset, tls, dns, refused, handshake, blocked,
+  no_network, core_crash, auth, quota, network_change, other. The app maps what
+  the connect flow throws (`ColituAcEvents.reasonOfError`): a timeout ->
+  `timeout`; a tunnel that came up and carried nothing -> `blocked`; a core
+  start/crash reason of the extension -> `core_crash`; the device or API
+  unreachable -> `no_network`; session, plan, device-limit and entitlement
+  errors -> `auth`; daily limit / quota -> `quota`; everything else -> `other`.
+  Turning "Anonymous usage statistics" off deletes the stored counters and the
+  queued events.
+- `GET /client/survey` (at most once a day after sign-in, never while connecting,
+  skipped when "Show surveys" is off) — `{ "survey": null }` or `{ "survey":
+  { "kind": "csat" | "nps" | "pmf" | "churn", "conversation_id"? } }`;
+  `POST /client/survey` — `{ "kind", "score"?, "answer"?, "reason"?, "comment"?,
+  "conversation_id"?, "dismissed", "platform": "ios" }` -> `204`. `score`: csat
+  1-5, nps 0-10; `answer` (pmf): very | somewhat | not; `reason` (churn): price |
+  speed | blocked | not_needed | other_vpn | technical | other; `comment` at most
+  1000 characters (csat and churn); `conversation_id` travels with csat only.
+  Closing the sheet sends `dismissed: true` and no answer.
 
 ## Not provided by the panel
 

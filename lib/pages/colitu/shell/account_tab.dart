@@ -11,6 +11,8 @@ import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
+import 'package:colitu_vpn/colitu/services/colitu_survey.dart';
+import 'package:colitu_vpn/colitu/services/colitu_telemetry.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/services/email_support_service.dart';
@@ -18,6 +20,7 @@ import 'package:colitu_vpn/colitu/services/tunnel_diagnostics_service.dart';
 import 'package:colitu_vpn/colitu/services/user_service.dart';
 import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
+import 'package:colitu_vpn/pages/colitu/invite/page.dart';
 import 'package:colitu_vpn/pages/colitu/link/page.dart';
 import 'package:colitu_vpn/pages/colitu/rotation/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/home_tab.dart';
@@ -64,6 +67,10 @@ class _AccountTabState extends State<AccountTab> {
   String _version = '';
   final _privacyKey = GlobalKey();
 
+  /// "Anonymous usage statistics" and "Show surveys" (both default on).
+  var _statsOn = true;
+  var _surveysOn = true;
+
   @override
   void initState() {
     super.initState();
@@ -84,11 +91,37 @@ class _AccountTabState extends State<AccountTab> {
       });
     }
     unawaited(_loadDevices());
+    unawaited(_loadPrivacySwitches());
     PackageInfo.fromPlatform().then((info) {
       if (mounted) {
         setState(() => _version = '${info.version} (${info.buildNumber})');
       }
     });
+  }
+
+  Future<void> _loadPrivacySwitches() async {
+    final stats = await ColituTelemetry.instance.statisticsEnabled();
+    final surveys = await ColituSurveys.instance.isEnabled();
+    if (mounted) {
+      setState(() {
+        _statsOn = stats;
+        _surveysOn = surveys;
+      });
+    }
+  }
+
+  Future<void> _setStats(bool value) async {
+    setState(() => _statsOn = value);
+    await ColituTelemetry.instance.setStatisticsEnabled(value);
+  }
+
+  Future<void> _setSurveys(bool value) async {
+    setState(() => _surveysOn = value);
+    try {
+      await ColituSurveys.instance.setEnabled(value);
+    } catch (e) {
+      debugPrint('Survey setting not saved: $e');
+    }
   }
 
   Future<void> _loadDevices() async {
@@ -544,6 +577,32 @@ class _AccountTabState extends State<AccountTab> {
         const SizedBox(height: 10),
         // General
         _SectionTitle(loc['account.general']),
+        ColituActionRow(
+          key: const ValueKey('inviteRow'),
+          icon: CupertinoIcons.gift,
+          title: loc['invite.title'],
+          hint: loc['invite.rowHint'],
+          onTap: () => ColituInvitePage.open(context),
+        ),
+        const SizedBox(height: 8),
+        ColituSwitchRow(
+          key: const ValueKey('statsSwitch'),
+          icon: CupertinoIcons.chart_bar,
+          title: loc['stats.title'],
+          hint: loc['stats.hint'],
+          value: _statsOn,
+          onChanged: _setStats,
+        ),
+        const SizedBox(height: 8),
+        ColituSwitchRow(
+          key: const ValueKey('surveysSwitch'),
+          icon: CupertinoIcons.chat_bubble_2,
+          title: loc['surveys.title'],
+          hint: loc['surveys.hint'],
+          value: _surveysOn,
+          onChanged: _setSurveys,
+        ),
+        const SizedBox(height: 8),
         ColituActionRow(
           icon: CupertinoIcons.play_circle,
           title: loc['account.howItWorks'],

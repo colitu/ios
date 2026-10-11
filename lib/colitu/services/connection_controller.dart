@@ -7,8 +7,10 @@ import 'package:path/path.dart' as p;
 import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/config/adaptive_connect3.dart';
 import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
+import 'package:colitu_vpn/colitu/services/colitu_ac_events.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
+import 'package:colitu_vpn/colitu/services/colitu_telemetry.dart';
 import 'package:colitu_vpn/colitu/services/user_service.dart';
 import 'package:colitu_vpn/colitu/services/support_service.dart';
 import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
@@ -64,7 +66,9 @@ class ColituConnectionController extends ChangeNotifier
     ColituVPNConfigAdapter? adapter,
     SecureTokenStore? tokenStore,
     UserService? userService,
+    ColituTelemetry? telemetry,
   }) : _vpnService = vpnService ?? ColituVPNService(),
+       _telemetry = telemetry ?? ColituTelemetry.instance,
        _adapter = adapter ?? ColituVPNConfigAdapter(),
        _tokenStore = tokenStore ?? SecureTokenStore(),
        _userService = userService;
@@ -73,6 +77,14 @@ class ColituConnectionController extends ChangeNotifier
   final UserService? _userService;
   final ColituVPNConfigAdapter _adapter;
   final SecureTokenStore _tokenStore;
+
+  /// Anonymous usage statistics and Adaptive Connect events (nothing is
+  /// recorded while the "Anonymous usage statistics" switch is off).
+  final ColituTelemetry _telemetry;
+
+  /// Servers tried before the current one in this connect (0: the first
+  /// choice); the `first_try` flag of the connect event.
+  var _serverFallbacks = 0;
 
   static const _disconnectTimeout = Duration(seconds: 7);
   static const _refreshInterval = Duration(seconds: 60);
@@ -385,6 +397,10 @@ class ColituConnectionController extends ChangeNotifier
 
   Future<void> init() async {
     WidgetsBinding.instance.addObserver(this);
+    _telemetry
+      ..tokenOf = (() => _hints.tokenFor(_clientNetwork) ?? '')
+      ..linkOf = (() => _link)
+      ..isNode = _isNode;
     alwaysOn = await PreferencesKey().readColituKillSwitchEnabled();
     autoConnect = await PreferencesKey().readColituAutoConnect();
     adBlock = await PreferencesKey().readColituAdBlock();
@@ -513,6 +529,7 @@ class ColituConnectionController extends ChangeNotifier
       if (!offline) await _loadRotationQuietly();
       _notify();
       unawaited(_refreshRecoverySetIfDue());
+      unawaited(_sendTelemetry());
       return true;
     } catch (e, stack) {
       debugPrint('Colitu refresh failed: $e');
@@ -858,6 +875,7 @@ class ColituConnectionController extends ChangeNotifier
     verifiedPublicIp = null;
     _resetTraffic();
     _notify();
+    final attempt = _telemetry.beginConnect(auto: _automatic);
     try {
       // The memory and the network decide the automatic pick: read both
       // before choosing.
@@ -869,6 +887,9 @@ class ColituConnectionController extends ChangeNotifier
         return;
       }
       final server = target ?? effectiveServer ?? picked!;
+      if (_automatic && target == null && !server.isMultihop) {
+        _recordChoice(server);
+      }
       // Whether the exit rotates decides the transports: learn it before
       // connecting if it is quickly known.
       if (rotation == null && !server.isMultihop) {
@@ -897,6 +918,7 @@ class ColituConnectionController extends ChangeNotifier
         }
         final serverEnd = DateTime.now().add(_serverBudget);
         final ({_Attempt outcome, bool engineStalled}) result;
+        _serverFallbacks = index;
         try {
           result = await _connectServer(
             candidate,
@@ -1000,7 +1022,75 @@ class ColituConnectionController extends ChangeNotifier
           ? e
           : ColituVerifyException(await _vpnService.latestTunnelFailureReason());
       _fail(colituErrorMessage(reported));
+    } finally {
+      _settleConnectTelemetry(attempt, serial);
     }
+  }
+
+  /// The connect call ends: an attempt nothing closed is a failure, unless
+  /// a newer connect, the user or a pause took it over (then it is taken
+  /// back). Only the call that began the attempt may close it.
+  void _settleConnectTelemetry(int attempt, int serial) {
+    if (!_telemetry.isCurrentAttempt(attempt)) return;
+    if (serial != _connectSerial || _disposed || paused != null) {
+      _telemetry.abandonConnect(id: attempt);
+      return;
+    }
+    _telemetry.endConnect(
+      ok: false,
+      reason: ColituAcEvents.reasonOfError(_lastConnectFailure),
+      id: attempt,
+    );
+  }
+
+  // ── Statistics and Adaptive Connect events ────────────────────────────
+
+  bool _isNode(String? id) {
+    if (id == null || id.isEmpty) return false;
+    final wanted = id.toLowerCase();
+    return servers.any((s) => !s.isMultihop && s.id.toLowerCase() == wanted);
+  }
+
+  /// Sends the counters (every 6 h) and the events (hourly) when due; never
+  /// blocks anything.
+  Future<void> _sendTelemetry() async {
+    try {
+      await _telemetry.sendDue(killSwitch: strictKillSwitch);
+    } catch (e) {
+      debugPrint('Statistics not sent: $e');
+    }
+  }
+
+  /// Automatic mode picked [server]: its fresh ping against the best fresh
+  /// ping among the nodes it chose from.
+  void _recordChoice(VPNServer server) {
+    final network = networkKey;
+    final now = DateTime.now();
+    final candidates = <String, int?>{
+      for (final s in servers)
+        if (!s.isMultihop && s.isSelectable && !autoExcluded(s))
+          s.id.toLowerCase(): _freshPing(s.selectionKey, network, now),
+    };
+    _telemetry.choice(server.id.toLowerCase(), candidates);
+  }
+
+  int? _freshPing(String key, String network, DateTime now) {
+    final ping = _pings[key];
+    return ping != null && ping.isFresh(network, now) ? ping.ms : null;
+  }
+
+  /// The features in use while a connection is up (names only).
+  void _recordFeatures(VPNServer actual) {
+    _telemetry.features([
+      if (splitTunnel.active) 'split_tunnel',
+      if (privacyMode) 'shield',
+      if (adBlock) 'ad_block',
+      if (advancedMode) 'advanced_mode',
+      if (actual.isMultihop) 'multihop',
+      if (autoConnect) 'auto_connect',
+      if (strictKillSwitch) 'kill_switch',
+      if (!autoSelection) 'manual_server',
+    ]);
   }
 
   // ── Recovery set (Adaptive Connect 3.0) ───────────────────────────────
@@ -1143,6 +1233,7 @@ class ColituConnectionController extends ChangeNotifier
       if (!first && DateTime.now().isAfter(budget)) return false;
       first = false;
       tried.add(config.serverId);
+      _serverFallbacks = tried.length - 1;
       phase = ColituConnectPhase.switchingServer;
       _notify();
       final server = _recoveryServer(config);
@@ -1311,6 +1402,11 @@ class ColituConnectionController extends ChangeNotifier
       if (serial != _connectSerial) return superseded;
       lastProtocol = _adapter.lastChosenProtocol;
       if (lastProtocol != null) tried.add(lastProtocol);
+      _telemetry.tryingConnect(
+        nodeId: _connectedNodeId,
+        protocol: lastProtocol,
+        fallbacks: _serverFallbacks,
+      );
       transport = lastProtocol;
       transportLatencyMs = _adapter.lastChosenLatencyMs;
 
@@ -1412,6 +1508,7 @@ class ColituConnectionController extends ChangeNotifier
           ok = await _verifyTraffic(serial);
           if (serial != _connectSerial) return superseded;
         }
+        _telemetry.functionalCheck(ok: ok);
       }
       if (ok) {
         connectedServer = connectedTo;
@@ -1425,14 +1522,24 @@ class ColituConnectionController extends ChangeNotifier
         _stallWatch.startSession(DateTime.now());
         _spareWatch.reset(DateTime.now());
         if (!connectedTo.isMultihop) {
+          // The last-good server is remembered from automatic-mode
+          // connections only; a manual pick keeps just its transport.
           _memory.recordSuccess(
             network,
             connectedTo.selectionKey,
             connectedProtocol,
             DateTime.now(),
+            goodServer: _automatic,
           );
           _saveMemory();
         }
+        _telemetry.endConnect(
+          ok: true,
+          nodeId: _connectedNodeId,
+          protocol: connectedProtocol,
+        );
+        _recordFeatures(connectedTo);
+        unawaited(_sendTelemetry());
         _notify();
         unawaited(_fetchPublicIp(serial));
         unawaited(_checkRuDirectNotice());
@@ -1542,10 +1649,30 @@ class ColituConnectionController extends ChangeNotifier
       if (action == ColituWatchAction.none) return;
       final network = networkKey;
       _memory.markStalled(network, server.selectionKey, current, DateTime.now());
+      // Statistics: the primary was found dead [detectMs] after its first
+      // failed check; the recovery below ends with the spare or a reconnect.
+      final detectedSince = _stallWatch.detectedSince;
+      _telemetry.beginRecovery(
+        failedAt: detectedSince ?? DateTime.now(),
+        protocol: current,
+        nodeId: _connectedNodeId,
+        failedProtocol: current,
+        detectMs: detectedSince == null
+            ? null
+            : DateTime.now().difference(detectedSince).inMilliseconds,
+        spare: spareAttached,
+      );
       if (action == ColituWatchAction.spareCarries) {
         _primaryDeadNoted = true;
-        _memory.recordSuccess(network, plan!.server, plan.protocol, DateTime.now());
+        _memory.recordSuccess(
+          network,
+          plan!.server,
+          plan.protocol,
+          DateTime.now(),
+          goodServer: _automatic,
+        );
         _saveMemory();
+        _telemetry.endRecovery(ok: true, newProtocol: plan.protocol);
         debugPrint(
           '${server.selectionKey}/$current is dead, the warm spare ${plan.server}/${plan.protocol} carries the traffic; it leads the next connect',
         );
@@ -1563,6 +1690,11 @@ class ColituConnectionController extends ChangeNotifier
       } on ColituPlanRequiredException {
         _fail(ColituLoc.I['err.noPlan']);
       }
+      _telemetry.endRecovery(
+        ok: connected,
+        newProtocol: connected ? transport : null,
+        reason: ColituAcEvents.reasonOfError(_lastConnectFailure),
+      );
     }());
   }
 
@@ -1995,6 +2127,7 @@ class ColituConnectionController extends ChangeNotifier
     if (_wasTunnelRunning && !busy) {
       _wasTunnelRunning = false;
       final unexpected = !_userDisconnected;
+      if (!unexpected) _telemetry.clearLive();
       connectedSeconds = 0;
       verifiedPublicIp = null;
       verified = false;
@@ -2056,27 +2189,71 @@ class ColituConnectionController extends ChangeNotifier
       _notify();
     }
 
+    // Statistics: a drop that was not asked for counts once, after the
+    // first wait (the extension has written its stop reason by then); the
+    // recovery ends when the tunnel is back or the attempts are used up.
+    var counted = false;
+    void endRecovery({required bool ok}) {
+      if (!counted) return;
+      counted = false;
+      _telemetry.endRecovery(
+        ok: ok,
+        newProtocol: ok ? transport : null,
+        reason: ColituAcEvents.reasonOfError(_lastConnectFailure),
+      );
+    }
+
     for (var attempt = 0; attempt < _recoveryDelays.length; attempt++) {
       await Future.delayed(_recoveryDelays[attempt]);
+      if (attempt == 0 && !cancelled() && !await _stoppedOnPurpose(droppedAt)) {
+        counted = true;
+        final up = _telemetry.unexpectedDrop();
+        _telemetry.beginRecovery(
+          failedAt: droppedAt,
+          nodeId: up.node,
+          failedProtocol: up.protocol,
+          spare: false,
+        );
+      }
       // iOS (on demand) or the user brought the tunnel back already.
-      if (settled()) return;
-      if (await _stoppedOnPurpose(droppedAt)) return giveUp(null);
+      if (settled()) {
+        endRecovery(ok: connected || _tunnelRunning);
+        return;
+      }
+      if (await _stoppedOnPurpose(droppedAt)) {
+        endRecovery(ok: false);
+        return giveUp(null);
+      }
       if (!await _waitForNetwork(cancelled)) {
+        endRecovery(ok: false);
         return giveUp(alwaysOn ? null : ColituLoc.I['err.reconnectFailed']);
       }
       while (loading && !cancelled()) {
         await Future.delayed(const Duration(milliseconds: 500));
       }
-      if (settled()) return;
-      if (!_canRecover) return giveUp(ColituLoc.I['err.reconnectFailed']);
+      if (settled()) {
+        endRecovery(ok: connected || _tunnelRunning);
+        return;
+      }
+      if (!_canRecover) {
+        endRecovery(ok: false);
+        return giveUp(ColituLoc.I['err.reconnectFailed']);
+      }
       try {
         await connect(reconnect: true, recovery: true);
       } on ColituPlanRequiredException {
+        endRecovery(ok: false);
         if (!cancelled()) _fail(ColituLoc.I['err.noPlan']);
         return;
       }
-      if (cancelled() || connected) return;
-      if (_hardFailure(_lastConnectFailure)) return;
+      if (cancelled() || connected) {
+        endRecovery(ok: connected);
+        return;
+      }
+      if (_hardFailure(_lastConnectFailure)) {
+        endRecovery(ok: false);
+        return;
+      }
       if (attempt + 1 < _recoveryDelays.length) {
         // The error of this attempt shows once the last one failed too.
         error = null;
@@ -2084,6 +2261,8 @@ class ColituConnectionController extends ChangeNotifier
         _notify();
       }
     }
+    // Every attempt failed.
+    endRecovery(ok: false);
   }
 
   /// Failures another attempt cannot fix: the session, the plan, the device
@@ -2894,6 +3073,13 @@ class ColituConnectionController extends ChangeNotifier
         for (final entry in measured.entries)
           entry.key: ColituPing(ms: entry.value, at: at, network: network),
       };
+      // Latency events: nodes only (a route's ping is its entry node's).
+      for (final server in servers) {
+        if (server.isMultihop || !measured.containsKey(server.selectionKey)) {
+          continue;
+        }
+        _telemetry.probe(server.id, measured[server.selectionKey]);
+      }
       _notify();
       await PreferencesKey().saveColituServerPings(ColituPing.encodeAll(_pings));
     }();

@@ -14,7 +14,29 @@ void main() {
     expect(request.toJson(), {
       'email': 'person@example.com',
       'password': 'long-password',
+      'source': 'app:ios',
     });
+  });
+
+  test('registration carries the invite code only when there is one', () {
+    const request = RegisterRequest(
+      email: 'person@example.com',
+      password: 'long-password',
+      invite: 'ABC123XY',
+    );
+
+    expect(request.toJson(), {
+      'email': 'person@example.com',
+      'password': 'long-password',
+      'source': 'app:ios',
+      'invite': 'ABC123XY',
+    });
+    expect(
+      const RegisterRequest(email: 'a@b.co', password: 'x', invite: '')
+          .toJson()
+          .containsKey('invite'),
+      isFalse,
+    );
   });
 
   test('decodes the snake case bearer token response', () {

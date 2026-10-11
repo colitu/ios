@@ -1226,6 +1226,7 @@ class ColituField extends StatelessWidget {
     this.autocorrect = true,
     this.enabled = true,
     this.maxLength,
+    this.onChanged,
   });
 
   final TextEditingController controller;
@@ -1239,6 +1240,7 @@ class ColituField extends StatelessWidget {
   final Widget? suffix;
   final IconData? prefixIcon;
   final ValueChanged<String>? onSubmitted;
+  final ValueChanged<String>? onChanged;
   final bool autocorrect;
   final bool enabled;
 
@@ -1281,6 +1283,7 @@ class ColituField extends StatelessWidget {
           enableSuggestions: autocorrect,
           enabled: enabled,
           onSubmitted: onSubmitted,
+          onChanged: onChanged,
           inputFormatters: limit == null
               ? null
               : [LengthLimitingTextInputFormatter(limit)],

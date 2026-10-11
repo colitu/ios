@@ -22,15 +22,28 @@ class RegisterRequest {
   final String? deviceId;
   final String? deviceName;
 
+  /// Invite code (6-12 A-Z0-9, upper case) from the invite field or an
+  /// invite link; omitted from the body when null or empty.
+  final String? invite;
+
   const RegisterRequest({
     required this.email,
     required this.password,
     this.name,
     this.deviceId,
     this.deviceName,
+    this.invite,
   });
 
-  Map<String, dynamic> toJson() => {'email': email, 'password': password};
+  /// Where the account was made: sent as `source`.
+  static const source = 'app:ios';
+
+  Map<String, dynamic> toJson() => {
+    'email': email,
+    'password': password,
+    'source': source,
+    if (invite != null && invite!.isNotEmpty) 'invite': invite,
+  };
 }
 
 class RefreshTokenRequest {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:colitu_vpn/colitu/config/feature_flags.dart';
+import 'package:colitu_vpn/colitu/services/colitu_referral.dart';
 import 'package:colitu_vpn/pages/colitu/auth/page.dart';
 import 'package:colitu_vpn/pages/colitu/gate/page.dart';
 import 'package:colitu_vpn/pages/colitu/mfa/page.dart';
@@ -111,6 +112,10 @@ abstract final class RouterPath {
   static const colituOnboarding = "/onboarding";
   static const colituVerify = "/verify";
   static const colituMfa = "/mfa";
+
+  /// An opened invite link `https://colitu.com/r/CODE` (see
+  /// [ColituInvite.handleLink]); the code is kept until sign-up.
+  static const colituInvite = "/r/:code";
   static const colituSubscription = "/subscription";
   static const colituAccount = "/account";
   static const home = "/home";
@@ -188,6 +193,14 @@ abstract final class RouterPath {
       GoRoute(
         path: RouterPath.colituGate,
         builder: (_, _) => const ColituGatePage(),
+      ),
+      GoRoute(
+        path: RouterPath.colituInvite,
+        // Only reachable when the system hands an invite link to the app.
+        redirect: (_, state) async {
+          await ColituInvite.keepPending(state.pathParameters['code']);
+          return RouterPath.colituGate;
+        },
       ),
       GoRoute(
         path: RouterPath.colituAuth,

@@ -231,12 +231,19 @@ class ColituAdaptiveMemory {
 
   /// Traffic flowed through [server] on [protocol]: it becomes the last-good
   /// server and transport, and what said otherwise is forgotten.
+  ///
+  /// [goodServer] false (a manual pick or a multihop route) remembers the
+  /// transport only: the "last good server" that the automatic ranking
+  /// puts first comes from automatic-mode connections alone, so a server
+  /// the user picked once by hand never wins the automatic choice later. The
+  /// previous last-good server is left as it was.
   void recordSuccess(
     String network,
     String server,
     String? protocol,
-    DateTime now,
-  ) {
+    DateTime now, {
+    bool goodServer = true,
+  }) {
     // Another transport carries traffic here: the short stall marks of the
     // others on this network were real, they now last 6 h.
     final promoted = [
@@ -250,7 +257,7 @@ class ColituAdaptiveMemory {
     _entries.removeWhere(
       (_, e) =>
           e.network == network &&
-          ((e.kind == _Kind.lastServer) ||
+          ((goodServer && e.kind == _Kind.lastServer) ||
               (e.kind == _Kind.penalized && e.server == server) ||
               (e.kind == _Kind.lastTransport && e.server == server) ||
               (e.kind == _Kind.stalledShort) ||
@@ -261,7 +268,7 @@ class ColituAdaptiveMemory {
     for (final e in promoted) {
       _put(_Entry(_Kind.stalled, network, e.server, e.protocol, now));
     }
-    _put(_Entry(_Kind.lastServer, network, server, '', now));
+    if (goodServer) _put(_Entry(_Kind.lastServer, network, server, '', now));
     if (protocol != null && protocol.isNotEmpty) {
       _put(_Entry(_Kind.lastTransport, network, server, protocol, now));
     }
@@ -559,14 +566,36 @@ const kAutoExcludedCountries = <String>{'RU'};
 bool autoExcluded(VPNServer server) =>
     kAutoExcludedCountries.contains(server.countryCode.trim().toUpperCase());
 
+/// Client countries where a server in the client's own country cannot open
+/// the sites that are blocked there, so the automatic mode puts such
+/// servers after the foreign ones. Everywhere else a server in the client's
+/// own country competes on latency like any other (a fast local node is the
+/// better choice, not the worse). One documented constant; keep it equal to
+/// the Android and Windows lists.
+const kHomePushbackCountries = <String>{
+  'RU', 'BY', 'KZ', 'UZ', 'TM', 'TJ', 'KG', 'AZ', 'IR', //
+  'CN', 'TR', 'VN', 'PK', 'EG', 'SA', 'AE', 'ET', 'MM',
+};
+
+/// The remembered (last-good) server yields to a fresh candidate that is at
+/// least this fraction of its latency faster (40 %)...
+const kMemoryBeatenFraction = 0.4;
+
+/// ...and at least this many ms faster.
+const kMemoryBeatenMs = 60;
+
 /// Order in which the automatic mode tries servers. [servers] come in panel
 /// order (best-first for this user); multihop routes, servers that cannot be
 /// selected and those in [kAutoExcludedCountries] are left out.
 ///
 /// 1. penalized on this network: last
 /// 2. fresh failed ping: after everything else but the penalized
-/// 3. in the user's own country ([clientCountry]): after the foreign ones
-/// 4. the last-good server on this network: first
+/// 3. in the user's own country ([clientCountry]): after the foreign ones,
+///    only when the client is in one of [kHomePushbackCountries]
+/// 4. the last-good server on this network (remembered from automatic-mode
+///    connections only): first, unless its fresh ping is known and a fresh
+///    candidate of the same standing (1-3) is at least
+///    [kMemoryBeatenFraction] and [kMemoryBeatenMs] ms faster
 /// 5. fresh successful pings, fastest first
 /// 6. no fresh ping: panel order, after the pinged ones
 ///
@@ -581,8 +610,9 @@ List<VPNServer> rankServers(
   required DateTime now,
 }) {
   final home = (clientCountry ?? '').trim().toUpperCase();
+  final pushHome = kHomePushbackCountries.contains(home);
   final lastGood = memory.lastGoodServer(network, now);
-  final rows = <({VPNServer server, int bucket, bool last, int? ms, int index})>[];
+  final rows = <({VPNServer server, int bucket, int? ms, int index})>[];
   var index = 0;
   for (final server in servers) {
     if (server.isMultihop || !server.isSelectable || autoExcluded(server)) continue;
@@ -594,22 +624,37 @@ List<VPNServer> rankServers(
       bucket = 3;
     } else if (fresh != null && fresh.failed) {
       bucket = 2;
-    } else if (home.isNotEmpty && server.countryCode == home) {
+    } else if (pushHome && server.countryCode.trim().toUpperCase() == home) {
       bucket = 1;
     } else {
       bucket = 0;
     }
-    rows.add((
-      server: server,
-      bucket: bucket,
-      last: lastGood != null && lastGood == key,
-      ms: fresh?.ms,
-      index: index++,
-    ));
+    rows.add((server: server, bucket: bucket, ms: fresh?.ms, index: index++));
   }
+  // The remembered server steps aside for a clearly faster one of the same
+  // standing.
+  final remembered = lastGood == null
+      ? null
+      : rows.where((r) => r.server.selectionKey == lastGood).firstOrNull;
+  final rememberedMs = remembered?.ms;
+  final memoryBeaten =
+      remembered != null &&
+      rememberedMs != null &&
+      rows.any((other) {
+        final ms = other.ms;
+        return other.server.selectionKey != lastGood &&
+            ms != null &&
+            other.bucket == remembered.bucket &&
+            rememberedMs - ms >= kMemoryBeatenMs &&
+            rememberedMs - ms >= rememberedMs * kMemoryBeatenFraction;
+      });
+  bool isLast(({VPNServer server, int bucket, int? ms, int index}) row) =>
+      !memoryBeaten && lastGood != null && row.server.selectionKey == lastGood;
   rows.sort((a, b) {
     if (a.bucket != b.bucket) return a.bucket.compareTo(b.bucket);
-    if (a.last != b.last) return a.last ? -1 : 1;
+    final aLast = isLast(a);
+    final bLast = isLast(b);
+    if (aLast != bLast) return aLast ? -1 : 1;
     final am = a.ms;
     final bm = b.ms;
     if (am != null && bm != null && am != bm) return am.compareTo(bm);
