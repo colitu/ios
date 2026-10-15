@@ -2233,7 +2233,10 @@ private extension PacketTunnelProvider {
         // fault, and the next attempt waits for it to come back.
         // A check that cannot see this network (capped wait) blames nothing
         // on it: the failure counts against the server as before.
-        let offline = !directCheckBlind && !(await deviceOnlineDirect())
+        var offline = false
+        if !directCheckBlind {
+            offline = !(await deviceOnlineDirect())
+        }
         let transient = offline || shouldTreatValidationFailureAsTransient(reason: reason)
         setStabilityState(transient ? .unhealthy : .failed, reason: "reconnect_validation_failed")
         reasserting = shouldKeepTrying()
