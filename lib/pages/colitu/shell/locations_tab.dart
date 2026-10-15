@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:colitu_vpn/colitu/l10n/server_names.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
@@ -34,23 +35,58 @@ class _LocationsTabState extends State<LocationsTab> {
   var _filter = 'all';
 
   /// The category filter in use; Simple mode always shows all.
-  String get _activeFilter =>
-      widget.controller.advancedMode ? _filter : 'all';
+  String get _activeFilter => widget.controller.advancedMode ? _filter : 'all';
   var _sort = _Sort.ping;
 
   /// Countries the user opened or closed by hand (country code -> open).
   /// Without an entry a country is open when it holds the selected server.
   final _expanded = <String, bool>{};
 
+  /// Pings were paused (VPN on) at the last controller change.
+  late bool _pingsWerePaused;
+  Timer? _pingResume;
+
+  /// After the tunnel goes down, measuring waits this long so the system
+  /// has removed its routes and the probes take the direct path.
+  static const pingResumeDelay = Duration(milliseconds: 1500);
+
   @override
   void initState() {
     super.initState();
     _search.addListener(() => setState(() {}));
+    _pingsWerePaused = widget.controller.pingsPaused;
+    widget.controller.addListener(_onController);
     unawaited(widget.controller.measurePings());
   }
 
   @override
+  void didUpdateWidget(LocationsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onController);
+      widget.controller.addListener(_onController);
+      _pingsWerePaused = widget.controller.pingsPaused;
+    }
+  }
+
+  /// The VPN went off: measuring picks up again.
+  void _onController() {
+    final paused = widget.controller.pingsPaused;
+    if (_pingsWerePaused && !paused) {
+      _pingResume?.cancel();
+      _pingResume = Timer(pingResumeDelay, () {
+        if (mounted) unawaited(widget.controller.measurePings());
+      });
+    } else if (paused) {
+      _pingResume?.cancel();
+    }
+    _pingsWerePaused = paused;
+  }
+
+  @override
   void dispose() {
+    _pingResume?.cancel();
+    widget.controller.removeListener(_onController);
     _search.dispose();
     super.dispose();
   }
@@ -71,7 +107,7 @@ class _LocationsTabState extends State<LocationsTab> {
       if (!server.inCategory(_activeFilter)) return false;
       if (query.isEmpty) return true;
       final haystack = _fold(
-        '${c.titleOf(server)} ${server.displayTitle} ${server.displayCountry} ${server.city ?? ''} ${server.countryCode}',
+        '${c.titleOf(server)} ${serverCityLabel(server)} ${server.displayTitle} ${server.displayCountry} ${server.city ?? ''} ${server.countryCode}',
       );
       return haystack.contains(query);
     }).toList();
@@ -106,7 +142,7 @@ class _LocationsTabState extends State<LocationsTab> {
       for (final route in widget.controller.multihopServers)
         if (query.isEmpty ||
             _fold(
-              '${route.name} ${route.entry?.label ?? ''} ${route.exit?.label ?? ''} ${route.entry?.country ?? ''} ${route.exit?.country ?? ''}',
+              '${route.name} ${ColituServerNames.route(route.name)} ${route.entry?.label ?? ''} ${route.exit?.label ?? ''} ${route.entry?.country ?? ''} ${route.exit?.country ?? ''}',
             ).contains(query))
           route,
     ];
@@ -160,19 +196,24 @@ class _LocationsTabState extends State<LocationsTab> {
     // servers becomes one expandable group.
     final groups = groupServersByCountry(rest, flat: searching);
     var index = 0;
-    Widget card(VPNServer server) {
-      final delay = Duration(milliseconds: 40 * (index++).clamp(0, 8));
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: ColituReveal(
-          delay: delay,
-          child: _ServerCard(controller: c, server: server),
+    // The first rows fade in one after another; later ones share the last
+    // delay so a long list never waits.
+    Duration nextDelay() => _staggerStep * math.min(index++, _staggerRows);
+
+    Widget card(VPNServer server, {bool recommended = false}) => Padding(
+      padding: const EdgeInsets.only(bottom: _cardGap),
+      child: _Reveal(
+        delay: nextDelay(),
+        child: _ServerCard(
+          controller: c,
+          server: server,
+          recommended: recommended,
         ),
-      );
-    }
+      ),
+    );
 
     Widget groupCard(ServerGroup group) {
-      final delay = Duration(milliseconds: 40 * (index++).clamp(0, 8));
+      final delay = nextDelay();
       final open = isGroupExpanded(
         group,
         selectedKey: selectedKey,
@@ -180,8 +221,8 @@ class _LocationsTabState extends State<LocationsTab> {
       );
       return Padding(
         key: ValueKey('group.${group.key}'),
-        padding: const EdgeInsets.only(bottom: 8),
-        child: ColituReveal(
+        padding: const EdgeInsets.only(bottom: _cardGap),
+        child: _Reveal(
           delay: delay,
           child: _CountryGroup(
             controller: c,
@@ -213,28 +254,31 @@ class _LocationsTabState extends State<LocationsTab> {
             _FastestButton(controller: c),
           ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Text(loc['locations.tagline'], style: ColituText.muted),
-        const SizedBox(height: 16),
+        const SizedBox(height: 20),
         TextField(
           controller: _search,
-          style: ColituText.body.copyWith(fontSize: 16),
+          style: ColituText.body.copyWith(fontSize: 16, height: 1.25),
           cursorColor: ColituColors.lilac,
           decoration: InputDecoration(
+            constraints: const BoxConstraints(minHeight: _fieldHeight),
             hintText: '${loc['locations.search']}…',
+            // Muted rather than dim: the hint keeps a 4.5:1 contrast.
             hintStyle: ColituText.body.copyWith(
-              color: ColituColors.dim,
+              color: ColituColors.muted,
               fontSize: 16,
+              height: 1.25,
             ),
             prefixIcon: const Padding(
-              padding: EdgeInsets.only(left: 16, right: 8),
+              padding: EdgeInsets.only(left: 18, right: 10),
               child: Icon(
                 CupertinoIcons.search,
                 size: 20,
                 color: ColituColors.muted,
               ),
             ),
-            prefixIconConstraints: const BoxConstraints(minWidth: 44),
+            prefixIconConstraints: const BoxConstraints(minWidth: 48),
             suffixIcon: _search.text.isEmpty
                 ? null
                 : IconButton(
@@ -242,61 +286,61 @@ class _LocationsTabState extends State<LocationsTab> {
                     icon: const Icon(
                       CupertinoIcons.xmark_circle_fill,
                       size: 18,
-                      color: ColituColors.dim,
+                      color: ColituColors.muted,
                     ),
                   ),
             filled: true,
-            fillColor: ColituColors.surface2,
+            fillColor: ColituColors.surface,
             contentPadding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 15,
+              horizontal: 18,
+              vertical: 16,
             ),
             border: _border(ColituColors.line),
             enabledBorder: _border(ColituColors.line),
-            focusedBorder: _border(ColituColors.violet),
+            focusedBorder: _border(_selectedBorder),
           ),
         ),
         const SizedBox(height: 14),
         // Simple mode: no category filters.
         if (c.advancedMode) ...[
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          clipBehavior: Clip.none,
-          child: Row(
-            children: [
-              for (final filter in _filters)
-                if (filter == 'all' ||
-                    filter == _filter ||
-                    c.servers.any((s) => s.inCategory(filter))) ...[
-                  ColituChip(
-                    label: filter == 'all'
-                        ? loc['locations.all']
-                        : loc['cat.$filter'],
-                    icon: _categoryIcon(filter),
-                    selected: _filter == filter,
-                    onTap: () => setState(() => _filter = filter),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-            ],
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            clipBehavior: Clip.none,
+            child: Row(
+              children: [
+                for (final filter in _filters)
+                  if (filter == 'all' ||
+                      filter == _filter ||
+                      c.servers.any((s) => s.inCategory(filter))) ...[
+                    _FilterChip(
+                      label: filter == 'all'
+                          ? loc['locations.all']
+                          : loc['cat.$filter'],
+                      icon: _categoryIcon(filter),
+                      selected: _filter == filter,
+                      onTap: () => setState(() => _filter = filter),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 18),
+          const SizedBox(height: 26),
         ] else
-          const SizedBox(height: 4),
+          const SizedBox(height: 12),
         if (!c.planActive && widget.onOpenPlan != null) ...[
           ColituPanel(
             onTap: widget.onOpenPlan,
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            radius: ColituRadius.md,
+            padding: _cardPadding,
+            radius: _cardRadius,
             child: Row(
               children: [
                 const ColituRoundIcon(
                   CupertinoIcons.globe,
-                  size: 42,
+                  size: _flagSize,
                   accent: true,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -307,15 +351,16 @@ class _LocationsTabState extends State<LocationsTab> {
                     ],
                   ),
                 ),
+                const SizedBox(width: 10),
                 const Icon(
                   CupertinoIcons.chevron_right,
                   size: 16,
-                  color: ColituColors.dim,
+                  color: ColituColors.muted,
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 26),
         ],
         if (c.servers.isEmpty)
           _Empty(c.planRequired ? loc['plan.noneHint'] : loc['server.none'])
@@ -335,10 +380,14 @@ class _LocationsTabState extends State<LocationsTab> {
               onTap: _chooseSort,
             ),
           ),
+          if (c.pingsPaused) ...[
+            const SizedBox(height: 4),
+            const _PingCachedHint(),
+          ],
           const SizedBox(height: 12),
-          for (final server in recommended) card(server),
+          for (final server in recommended) card(server, recommended: true),
           if (recommended.isNotEmpty && rest.isNotEmpty) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
             _SectionHeader(title: loc['locations.allServers']),
             const SizedBox(height: 12),
           ],
@@ -348,21 +397,23 @@ class _LocationsTabState extends State<LocationsTab> {
         if (routes.isNotEmpty) ...[
           const SizedBox(height: 14),
           _SectionHeader(title: loc['multihop.section']),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Text(loc['multihop.sectionHint'], style: ColituText.small),
           const SizedBox(height: 12),
           for (final route in routes)
             Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.only(bottom: _cardGap),
               child: _RouteCard(controller: c, route: route),
             ),
         ],
+        // Room so the floating navigation bar never covers the last row.
+        const SizedBox(height: 24),
       ],
     );
   }
 
   OutlineInputBorder _border(Color color) => OutlineInputBorder(
-    borderRadius: BorderRadius.circular(ColituRadius.pill),
+    borderRadius: BorderRadius.circular(_fieldRadius),
     borderSide: BorderSide(color: color),
   );
 }
@@ -379,6 +430,68 @@ IconData _categoryIcon(String category) => switch (category) {
   _ => CupertinoIcons.circle,
 };
 
+// ── Metrics and motion ─────────────────────────────────────────────────────
+// The Android list uses the same numbers; keep the two in step.
+
+const _cardRadius = 24.0;
+const _cardPadding = EdgeInsets.symmetric(horizontal: 20, vertical: 16);
+const _cardGap = 12.0;
+const _rowMinHeight = 76.0;
+const _flagSize = 44.0;
+const _flagGap = 14.0;
+const _fieldHeight = 52.0;
+const _fieldRadius = 18.0;
+
+const _nameStyle = TextStyle(
+  fontFamily: ColituText.family,
+  fontSize: 17,
+  fontWeight: FontWeight.w600,
+  letterSpacing: -0.2,
+  color: ColituColors.text,
+  height: 1.25,
+);
+const _subStyle = TextStyle(
+  fontFamily: ColituText.family,
+  fontSize: 14,
+  fontWeight: FontWeight.w400,
+  color: ColituColors.muted,
+  height: 1.3,
+);
+final _connectedStyle = _subStyle.copyWith(
+  color: ColituColors.lilac,
+  fontWeight: FontWeight.w600,
+);
+const _kickerStyle = TextStyle(
+  fontFamily: ColituText.family,
+  fontSize: 12,
+  fontWeight: FontWeight.w600,
+  letterSpacing: 1.9,
+  color: ColituColors.muted,
+  height: 1.2,
+);
+
+/// Border of the selected or connected row: a soft violet line, no fill.
+const _selectedBorder = Color(0x999F8CFF);
+
+/// Border of the recommended card: the accent-on-dark violet, kept faint.
+const _recommendedBorder = Color(0x4D9B8CFF);
+
+const _expandDuration = Duration(milliseconds: 250);
+const _borderDuration = Duration(milliseconds: 220);
+const _staggerStep = Duration(milliseconds: 35);
+const _staggerRows = 8;
+
+/// True when the system asks for reduced motion.
+bool _still(BuildContext context) => MediaQuery.disableAnimationsOf(context);
+
+Duration _motion(BuildContext context, Duration duration) =>
+    _still(context) ? Duration.zero : duration;
+
+/// Upper case that keeps the Turkish dotted capital İ.
+String _upper(String text) => ColituLoc.I.language == 'tr'
+    ? text.replaceAll('i', 'İ').toUpperCase()
+    : text.toUpperCase();
+
 class _Empty extends StatelessWidget {
   const _Empty(this.text);
 
@@ -393,6 +506,7 @@ class _Empty extends StatelessWidget {
   );
 }
 
+/// Quiet small-caps section label with an optional control on the right.
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader({required this.title, this.trailing});
 
@@ -400,10 +514,282 @@ class _SectionHeader extends StatelessWidget {
   final Widget? trailing;
 
   @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 4),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            _upper(title),
+            style: _kickerStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        ?trailing,
+      ],
+    ),
+  );
+}
+
+/// While the VPN is on no ping is measured (it would run through the
+/// tunnel); a quiet line says the numbers are the last direct readings.
+class _PingCachedHint extends StatelessWidget {
+  const _PingCachedHint();
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 4),
+    child: Row(
+      children: [
+        const Icon(CupertinoIcons.clock, size: 13, color: ColituColors.muted),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            ColituLoc.I['locations.pingCached'],
+            style: ColituText.small,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Fades a row in and lifts it a few points; skipped under reduced motion.
+class _Reveal extends StatefulWidget {
+  const _Reveal({required this.child, this.delay = Duration.zero});
+
+  final Widget child;
+  final Duration delay;
+
+  @override
+  State<_Reveal> createState() => _RevealState();
+}
+
+class _RevealState extends State<_Reveal> with SingleTickerProviderStateMixin {
+  late final _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 250),
+  );
+  late final _curve = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+  );
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(widget.delay, () {
+      if (mounted) _controller.forward();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_still(context)) {
+      _timer?.cancel();
+      _controller.value = 1;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _curve.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_still(context)) return widget.child;
+    return AnimatedBuilder(
+      animation: _curve,
+      builder: (context, child) => Opacity(
+        opacity: _curve.value,
+        child: Transform.translate(
+          offset: Offset(0, 10 * (1 - _curve.value)),
+          child: child,
+        ),
+      ),
+      child: widget.child,
+    );
+  }
+}
+
+/// Shrinks to 0.98 while pressed and springs back on release.
+class _PressScale extends StatelessWidget {
+  const _PressScale({required this.pressed, required this.child});
+
+  final bool pressed;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_still(context)) return child;
+    return AnimatedScale(
+      scale: pressed ? 0.98 : 1,
+      duration: Duration(milliseconds: pressed ? 110 : 320),
+      curve: pressed ? Curves.easeOut : Curves.easeOutBack,
+      child: child,
+    );
+  }
+}
+
+/// A tappable surface with the press scale.
+class _Press extends StatefulWidget {
+  const _Press({super.key, required this.child, this.onTap});
+
+  final Widget child;
+  final VoidCallback? onTap;
+
+  @override
+  State<_Press> createState() => _PressState();
+}
+
+class _PressState extends State<_Press> {
+  var _down = false;
+
+  void _set(bool down) {
+    if (_down != down) setState(() => _down = down);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.onTap == null) return widget.child;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => _set(true),
+      onTapUp: (_) => _set(false),
+      onTapCancel: () => _set(false),
+      onTap: widget.onTap,
+      child: _PressScale(pressed: _down, child: widget.child),
+    );
+  }
+}
+
+enum _Edge { plain, recommended, selected }
+
+/// The row card: dark surface, 24 radius, a hairline that turns violet
+/// (animated) when the row is chosen.
+class _Card extends StatelessWidget {
+  const _Card({
+    required this.child,
+    this.edge = _Edge.plain,
+    this.padding = _cardPadding,
+  });
+
+  final Widget child;
+  final _Edge edge;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+    duration: _motion(context, _borderDuration),
+    curve: Curves.easeOutCubic,
+    padding: padding,
+    decoration: BoxDecoration(
+      color: ColituColors.surface,
+      borderRadius: BorderRadius.circular(_cardRadius),
+      border: Border.all(
+        color: switch (edge) {
+          _Edge.selected => _selectedBorder,
+          _Edge.recommended => _recommendedBorder,
+          _Edge.plain => ColituColors.line,
+        },
+        width: edge == _Edge.selected ? 1.5 : 1,
+      ),
+    ),
+    child: child,
+  );
+}
+
+/// Flag, title and one secondary line; [trailing] sits on the right.
+class _RowBody extends StatelessWidget {
+  const _RowBody({
+    required this.leading,
+    required this.title,
+    required this.subtitle,
+    required this.trailing,
+    this.connected = false,
+    this.badge,
+  });
+
+  final Widget leading;
+  final String title;
+  final String subtitle;
+  final List<Widget> trailing;
+  final bool connected;
+  final Widget? badge;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: BoxConstraints(
+      minHeight: _rowMinHeight - _cardPadding.vertical,
+    ),
+    child: Row(
+      children: [
+        leading,
+        const SizedBox(width: _flagGap),
+        Expanded(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      title,
+                      style: _nameStyle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (badge != null) ...[const SizedBox(width: 8), badge!],
+                ],
+              ),
+              if (connected || subtitle.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                _SubLine(subtitle, connected: connected),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        ...trailing,
+      ],
+    ),
+  );
+}
+
+/// The muted second line; "Connected" in violet goes first when it applies.
+class _SubLine extends StatelessWidget {
+  const _SubLine(this.text, {this.connected = false});
+
+  final String text;
+  final bool connected;
+
+  @override
   Widget build(BuildContext context) => Row(
     children: [
-      Expanded(child: Text(title, style: ColituText.h2.copyWith(fontSize: 20))),
-      ?trailing,
+      if (connected) ...[
+        Text(ColituLoc.I['server.connected'], style: _connectedStyle),
+        if (text.isNotEmpty) const Text(' · ', style: _subStyle),
+      ],
+      if (text.isNotEmpty)
+        Flexible(
+          child: Text(
+            text,
+            style: _subStyle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
     ],
   );
 }
@@ -417,18 +803,19 @@ class _FastestButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = controller.automaticTarget;
-    return ColituPressable(
+    return _Press(
       onTap: controller.selectAuto,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.fromLTRB(12, 11, 10, 11),
+        duration: _motion(context, _borderDuration),
+        curve: Curves.easeOutCubic,
+        height: 44,
+        padding: const EdgeInsets.fromLTRB(14, 0, 12, 0),
         decoration: BoxDecoration(
-          color: active
-              ? ColituColors.violet.withValues(alpha: 0.18)
-              : ColituColors.surface2,
+          color: ColituColors.surface,
           borderRadius: BorderRadius.circular(ColituRadius.pill),
           border: Border.all(
-            color: active ? ColituColors.violet : ColituColors.lineStrong,
+            color: active ? _selectedBorder : ColituColors.lineStrong,
+            width: active ? 1.5 : 1,
           ),
         ),
         child: Row(
@@ -459,6 +846,59 @@ class _FastestButton extends StatelessWidget {
   }
 }
 
+/// Category filter: calm pill, violet outline when chosen.
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    required this.icon,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => _Press(
+    onTap: onTap,
+    child: AnimatedContainer(
+      duration: _motion(context, _borderDuration),
+      curve: Curves.easeOutCubic,
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: selected ? const Color(0x1F9F8CFF) : ColituColors.surface,
+        borderRadius: BorderRadius.circular(_fieldRadius),
+        border: Border.all(
+          color: selected ? _selectedBorder : ColituColors.line,
+          width: selected ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 18,
+            color: selected ? ColituColors.lilac : ColituColors.muted,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: ColituText.label.copyWith(
+              fontSize: 14,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              color: ColituColors.text,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _SortButton extends StatelessWidget {
   const _SortButton({required this.label, required this.onTap});
 
@@ -466,15 +906,10 @@ class _SortButton extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => ColituPressable(
+  Widget build(BuildContext context) => _Press(
     onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: ColituColors.surface2,
-        borderRadius: BorderRadius.circular(ColituRadius.pill),
-        border: Border.all(color: ColituColors.line),
-      ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -486,7 +921,10 @@ class _SortButton extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             label,
-            style: ColituText.small.copyWith(color: ColituColors.text),
+            style: ColituText.small.copyWith(
+              fontSize: 13,
+              color: ColituColors.text,
+            ),
           ),
           const SizedBox(width: 4),
           const Icon(
@@ -501,10 +939,15 @@ class _SortButton extends StatelessWidget {
 }
 
 class _ServerCard extends StatelessWidget {
-  const _ServerCard({required this.controller, required this.server});
+  const _ServerCard({
+    required this.controller,
+    required this.server,
+    this.recommended = false,
+  });
 
   final ColituConnectionController controller;
   final VPNServer server;
+  final bool recommended;
 
   @override
   Widget build(BuildContext context) {
@@ -519,98 +962,113 @@ class _ServerCard extends StatelessWidget {
     final code = server.countryCode;
     final country = code.length == 2
         ? loc.countryName(code)
-        : server.displayCountry;
-    final city = server.city?.trim() ?? '';
-    final tags = _tags(server);
+        : ColituServerNames.displayName(server.displayCountry);
+    final title = country.isEmpty
+        ? ColituServerNames.displayName(server.displayTitle, countryCode: code)
+        : country;
+    final city = ColituServerNames.city(server.city);
+    final subtitle =
+        city.isNotEmpty && city.toLowerCase() != title.toLowerCase()
+        ? city
+        : '';
     return Opacity(
       opacity: selectable ? 1 : 0.5,
-      child: ColituTile(
-        active: selected || connected,
+      child: _Press(
         onTap: selectable ? () => c.selectServer(server) : null,
-        padding: _rowPadding,
-        child: Row(
-          children: [
-            ColituFlag(code, size: _flagSize),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: _NameLine(
-                          country.isEmpty ? server.displayTitle : country,
-                          city:
-                              city.isNotEmpty &&
-                                  city.toLowerCase() != country.toLowerCase()
-                              ? city
-                              : null,
-                        ),
-                      ),
-                      if (connected) ...[
-                        const SizedBox(width: 6),
-                        _Pill(loc['server.connected'], accent: true),
-                      ] else if (server.isPremium) ...[
-                        const SizedBox(width: 6),
-                        const ColituBadge('PRO'),
-                      ],
-                    ],
-                  ),
-                  if (tags.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    _TagLine(tags),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            if (selectable)
-              _Ping(c.pingOf(server))
-            else
-              Text(loc['server.offline'], style: ColituText.small),
-            const SizedBox(width: 8),
-            _GoButton(active: selected || connected),
-          ],
+        child: _Card(
+          edge: selected || connected
+              ? _Edge.selected
+              : recommended
+              ? _Edge.recommended
+              : _Edge.plain,
+          child: _RowBody(
+            leading: ColituFlag(code, size: _flagSize),
+            title: title,
+            subtitle: subtitle,
+            connected: connected,
+            badge: _badgeFor(server),
+            trailing: [
+              if (selectable)
+                _Ping(c.pingOf(server))
+              else
+                Text(loc['server.offline'], style: ColituText.small),
+            ],
+          ),
         ),
       ),
     );
   }
-
-  /// Localized service name when the strings have one, else the brand name.
-  static String _serviceLabel(String key, String fallback) {
-    final text = ColituLoc.I['service.$key'];
-    return text == 'service.$key' ? fallback : text;
-  }
-
-  /// Services the panel verified on this node first, then the use cases they
-  /// do not already cover.
-  static List<_Tag> _tags(VPNServer server) {
-    final out = <_Tag>[
-      // First, so it never folds into the "+N" pill.
-      if (ColituAdBlock.hostsDns(server.host))
-        _Tag(ColituLoc.I['cat.adblock'], category: 'adblock'),
-      for (final entry in VPNServer.serviceNames.entries)
-        if (server.services.contains(entry.key))
-          _Tag(_serviceLabel(entry.key, entry.value), service: entry.key),
-    ];
-    final hasAi = server.services.any(VPNServer.requiredAiServices.contains);
-    final hasStreaming = server.services.any(
-      VPNServer.streamingServices.contains,
-    );
-    for (final category in VPNServer.categoryOrder) {
-      if (!server.categories.contains(category)) continue;
-      if (category == 'ai' && hasAi) continue;
-      if (category == 'streaming' && hasStreaming) continue;
-      out.add(_Tag(ColituLoc.I['cat.$category'], category: category));
-    }
-    return out;
-  }
 }
 
-/// A country with several servers: the header (flag, country, how many
-/// locations, best ping) opens and closes the city rows below it.
-class _CountryGroup extends StatelessWidget {
+/// The one small badge a row may carry: PRO first, else ad-free YouTube or
+/// the ad blocker when the node has them.
+Widget? _badgeFor(VPNServer server) {
+  if (server.isPremium) return const ColituBadge('PRO');
+  if (server.services.contains('youtube_adfree')) {
+    return const _MiniBadge(
+      mark: ColituServiceMark('youtube_adfree', size: 12),
+    );
+  }
+  if (ColituAdBlock.hostsDns(server.host)) {
+    return const _MiniBadge(
+      mark: Icon(CupertinoIcons.eye_slash, size: 12, color: ColituColors.muted),
+    );
+  }
+  return null;
+}
+
+/// Icon-only round badge so the country name keeps its room.
+class _MiniBadge extends StatelessWidget {
+  const _MiniBadge({required this.mark});
+
+  final Widget mark;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 22,
+    height: 22,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: ColituColors.surface2,
+      shape: BoxShape.circle,
+      border: Border.all(color: ColituColors.line),
+    ),
+    child: SizedBox(width: 12, height: 12, child: mark),
+  );
+}
+
+/// Localized service name when the strings have one, else the brand name.
+String _serviceLabel(String key, String fallback) {
+  final text = ColituLoc.I['service.$key'];
+  return text == 'service.$key' ? fallback : text;
+}
+
+/// Services the panel verified on this node first, then the use cases they
+/// do not already cover.
+List<_Tag> _tagsOf(VPNServer server) {
+  final out = <_Tag>[
+    if (ColituAdBlock.hostsDns(server.host))
+      _Tag(ColituLoc.I['cat.adblock'], category: 'adblock'),
+    for (final entry in VPNServer.serviceNames.entries)
+      if (server.services.contains(entry.key))
+        _Tag(_serviceLabel(entry.key, entry.value), service: entry.key),
+  ];
+  final hasAi = server.services.any(VPNServer.requiredAiServices.contains);
+  final hasStreaming = server.services.any(
+    VPNServer.streamingServices.contains,
+  );
+  for (final category in VPNServer.categoryOrder) {
+    if (!server.categories.contains(category)) continue;
+    if (category == 'ai' && hasAi) continue;
+    if (category == 'streaming' && hasStreaming) continue;
+    out.add(_Tag(ColituLoc.I['cat.$category'], category: category));
+  }
+  return out;
+}
+
+/// A country with several servers: one card whose header (flag, country,
+/// how many locations, best ping) opens and closes the city rows inside it.
+class _CountryGroup extends StatefulWidget {
   const _CountryGroup({
     required this.controller,
     required this.group,
@@ -624,99 +1082,184 @@ class _CountryGroup extends StatelessWidget {
   final VoidCallback onToggle;
 
   @override
+  State<_CountryGroup> createState() => _CountryGroupState();
+}
+
+class _CountryGroupState extends State<_CountryGroup> {
+  var _down = false;
+
+  void _set(bool down) {
+    if (_down != down) setState(() => _down = down);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final loc = ColituLoc.I;
-    final c = controller;
+    final c = widget.controller;
+    final group = widget.group;
+    final expanded = widget.expanded;
     final first = group.servers.first;
     final code = first.countryCode;
     final country = code.length == 2
         ? loc.countryName(code)
-        : first.displayCountry;
+        : ColituServerNames.displayName(first.displayCountry);
     final selectedKey = c.autoSelection ? null : c.selectedServer?.selectionKey;
     final connectedKey = c.connected ? c.connectedServer?.selectionKey : null;
     final hasSelected = group.contains(selectedKey);
     final hasConnected = group.contains(connectedKey);
     final anySelectable = group.servers.any((s) => s.isSelectable);
-    return Column(
-      children: [
-        Opacity(
-          opacity: anySelectable ? 1 : 0.5,
-          child: Semantics(
-            button: true,
-            expanded: expanded,
-            child: ColituTile(
-              active: !expanded && (hasSelected || hasConnected),
-              onTap: onToggle,
-              padding: _rowPadding,
-              child: Row(
-                children: [
-                  ColituFlag(code, size: _flagSize),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                country.isEmpty ? first.displayTitle : country,
-                                style: _nameStyle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (!expanded && hasConnected) ...[
-                              const SizedBox(width: 6),
-                              _Pill(loc['server.connected'], accent: true),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: 1),
-                        Text(
-                          loc.count('locationCount', group.servers.length),
-                          style: _cityStyle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+    return _PressScale(
+      pressed: _down,
+      child: _Card(
+        // Open, the chosen city carries the outline instead of the card.
+        edge: !expanded && (hasSelected || hasConnected)
+            ? _Edge.selected
+            : _Edge.plain,
+        padding: EdgeInsets.zero,
+        child: Column(
+          children: [
+            Semantics(
+              button: true,
+              expanded: expanded,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (_) => _set(true),
+                onTapUp: (_) => _set(false),
+                onTapCancel: () => _set(false),
+                onTap: widget.onToggle,
+                child: Opacity(
+                  opacity: anySelectable ? 1 : 0.5,
+                  child: Padding(
+                    padding: _cardPadding,
+                    child: _RowBody(
+                      leading: ColituFlag(code, size: _flagSize),
+                      title: country.isEmpty
+                          ? ColituServerNames.displayName(
+                              first.displayTitle,
+                              countryCode: code,
+                            )
+                          : country,
+                      subtitle: loc.count(
+                        'locationCount',
+                        group.servers.length,
+                      ),
+                      connected: !expanded && hasConnected,
+                      trailing: [
+                        if (anySelectable)
+                          _Ping(group.bestPing(c.pingOf))
+                        else
+                          Text(loc['server.offline'], style: ColituText.small),
+                        const SizedBox(width: 12),
+                        AnimatedRotation(
+                          turns: expanded ? 0.5 : 0,
+                          duration: _motion(context, _expandDuration),
+                          curve: Curves.easeOutCubic,
+                          child: const Icon(
+                            CupertinoIcons.chevron_down,
+                            size: 16,
+                            color: ColituColors.muted,
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  if (anySelectable)
-                    _Ping(group.bestPing(c.pingOf))
-                  else
-                    Text(loc['server.offline'], style: ColituText.small),
-                  const SizedBox(width: 8),
-                  _ExpandButton(expanded: expanded),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: expanded
-              ? Column(
+            _Expandable(
+              expanded: expanded,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                child: Column(
                   children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(10, 0, 10, 6),
+                      child: Divider(height: 1, color: ColituColors.line),
+                    ),
                     for (final server in group.servers)
                       Padding(
-                        padding: const EdgeInsets.only(top: 6, left: 16),
+                        padding: const EdgeInsets.only(top: 4),
                         child: _CityRow(controller: c, server: server),
                       ),
                   ],
-                )
-              : const SizedBox(width: double.infinity),
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
 
-/// One city inside an open country group: city, ping, a checkmark when it is
-/// the chosen one. Tapping selects it just like a single server row.
+/// Opens and closes its child with a size and fade animation (250 ms). The
+/// child leaves the tree once it is fully closed.
+class _Expandable extends StatefulWidget {
+  const _Expandable({required this.expanded, required this.child});
+
+  final bool expanded;
+  final Widget child;
+
+  @override
+  State<_Expandable> createState() => _ExpandableState();
+}
+
+class _ExpandableState extends State<_Expandable>
+    with SingleTickerProviderStateMixin {
+  late final _controller = AnimationController(
+    vsync: this,
+    duration: _expandDuration,
+    value: widget.expanded ? 1 : 0,
+  );
+  late final _curve = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+    reverseCurve: Curves.easeInCubic,
+  );
+
+  @override
+  void didUpdateWidget(covariant _Expandable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.expanded == oldWidget.expanded) return;
+    if (_still(context)) {
+      _controller.value = widget.expanded ? 1 : 0;
+    } else if (widget.expanded) {
+      _controller.forward();
+    } else {
+      _controller.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _curve.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    builder: (context, child) {
+      if (!widget.expanded && _controller.value == 0) {
+        return const SizedBox(width: double.infinity);
+      }
+      final t = _curve.value;
+      return ClipRect(
+        child: Align(
+          alignment: Alignment.topCenter,
+          heightFactor: t,
+          child: Opacity(opacity: t, child: child),
+        ),
+      );
+    },
+    child: widget.child,
+  );
+}
+
+/// One city inside an open country card: city, up to three service tags,
+/// ping, and a check when it is the chosen one. Tapping selects it just like
+/// a single server row.
 class _CityRow extends StatelessWidget {
   const _CityRow({required this.controller, required this.server});
 
@@ -734,96 +1277,87 @@ class _CityRow extends StatelessWidget {
         c.connected && c.connectedServer?.selectionKey == server.selectionKey;
     final active = selected || connected;
     final selectable = server.isSelectable;
-    final tags = _ServerCard._tags(server);
+    final tags = _tagsOf(server);
     return Opacity(
       opacity: selectable ? 1 : 0.5,
-      child: ColituTile(
+      child: _Press(
         key: ValueKey('city.${server.selectionKey}'),
-        active: active,
         onTap: selectable ? () => c.selectServer(server) : null,
-        padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          serverCityLabel(server),
-                          style: _nameStyle.copyWith(fontSize: 15),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+        child: AnimatedContainer(
+          duration: _motion(context, _borderDuration),
+          curve: Curves.easeOutCubic,
+          constraints: const BoxConstraints(minHeight: 56),
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(_fieldRadius),
+            border: Border.all(
+              color: active ? _selectedBorder : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            serverCityLabel(server),
+                            style: _nameStyle.copyWith(fontSize: 15.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                      if (connected) ...[
-                        const SizedBox(width: 6),
-                        _Pill(loc['server.connected'], accent: true),
-                      ] else if (server.isPremium) ...[
-                        const SizedBox(width: 6),
-                        const ColituBadge('PRO'),
+                        if (connected) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            loc['server.connected'],
+                            style: _connectedStyle.copyWith(fontSize: 12.5),
+                          ),
+                        ] else if (server.isPremium) ...[
+                          const SizedBox(width: 8),
+                          const ColituBadge('PRO'),
+                        ],
                       ],
+                    ),
+                    if (tags.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      _TagLine(tags),
                     ],
-                  ),
-                  if (tags.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    _TagLine(tags),
                   ],
-                ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            if (selectable)
-              _Ping(c.pingOf(server))
-            else
-              Text(loc['server.offline'], style: ColituText.small),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: active
-                  ? const Icon(
-                      CupertinoIcons.checkmark_alt,
-                      size: 19,
-                      color: ColituColors.lilac,
-                    )
-                  : null,
-            ),
-          ],
+              const SizedBox(width: 10),
+              if (selectable)
+                _Ping(c.pingOf(server))
+              else
+                Text(loc['server.offline'], style: ColituText.small),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: AnimatedSwitcher(
+                  duration: _motion(context, _borderDuration),
+                  child: active
+                      ? const Icon(
+                          CupertinoIcons.checkmark_alt,
+                          key: ValueKey('check'),
+                          size: 17,
+                          color: ColituColors.lilac,
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
-}
-
-/// Round chevron of a country header; turns down when the group is open.
-class _ExpandButton extends StatelessWidget {
-  const _ExpandButton({required this.expanded});
-
-  final bool expanded;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: _goSize,
-    height: _goSize,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      color: ColituColors.surface2,
-      border: Border.all(color: ColituColors.lineStrong),
-    ),
-    child: AnimatedRotation(
-      turns: expanded ? 0.25 : 0,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      child: const Icon(
-        CupertinoIcons.chevron_right,
-        size: 14,
-        color: ColituColors.text,
-      ),
-    ),
-  );
 }
 
 /// A multihop route: the entry and exit flags, the route name and the ping
@@ -846,92 +1380,36 @@ class _RouteCard extends StatelessWidget {
     final selectable = route.isSelectable;
     return Opacity(
       opacity: selectable ? 1 : 0.5,
-      child: ColituTile(
+      child: _Press(
         key: ValueKey('route.${route.id}'),
-        active: selected || connected,
         onTap: selectable ? () => c.selectServer(route) : null,
-        padding: _rowPadding,
-        child: Row(
-          children: [
-            ColituFlag(route.entry?.country ?? '', size: 30),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4),
-              child: Icon(
-                CupertinoIcons.arrow_right,
-                size: 14,
-                color: ColituColors.muted,
-              ),
-            ),
-            ColituFlag(route.exit?.country ?? '', size: 30),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          route.name,
-                          style: _nameStyle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (connected) ...[
-                        const SizedBox(width: 6),
-                        _Pill(loc['server.connected'], accent: true),
-                      ],
-                    ],
+        child: _Card(
+          edge: selected || connected ? _Edge.selected : _Edge.plain,
+          child: _RowBody(
+            leading: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ColituFlag(route.entry?.country ?? '', size: 32),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: Icon(
+                    CupertinoIcons.arrow_right,
+                    size: 13,
+                    color: ColituColors.muted,
                   ),
-                  const SizedBox(height: 1),
-                  Text(
-                    selectable ? loc['multihop.ping'] : loc['server.offline'],
-                    style: ColituText.small,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
+                ),
+                ColituFlag(route.exit?.country ?? '', size: 32),
+              ],
             ),
-            const SizedBox(width: 8),
-            if (selectable) _Ping(c.pingOf(route)),
-            const SizedBox(width: 10),
-            _GoButton(active: selected || connected),
-          ],
+            title: ColituServerNames.route(route.name),
+            subtitle: selectable ? loc['multihop.ping'] : loc['server.offline'],
+            connected: connected,
+            trailing: [if (selectable) _Ping(c.pingOf(route))],
+          ),
         ),
       ),
     );
   }
-}
-
-/// Compact row metrics shared by the server rows, country headers and routes.
-const _rowPadding = EdgeInsets.fromLTRB(12, 9, 12, 9);
-const _flagSize = 40.0;
-const _goSize = 30.0;
-final _nameStyle = ColituText.label.copyWith(fontSize: 16);
-final _cityStyle = ColituText.muted.copyWith(fontSize: 13);
-
-/// Country name with the city after it in the smaller secondary style, on one
-/// line; the city is what gets cut off first.
-class _NameLine extends StatelessWidget {
-  const _NameLine(this.name, {this.city});
-
-  final String name;
-  final String? city;
-
-  @override
-  Widget build(BuildContext context) => Text.rich(
-    TextSpan(
-      text: name,
-      style: _nameStyle,
-      children: [
-        if (city != null) TextSpan(text: '  $city', style: _cityStyle),
-      ],
-    ),
-    maxLines: 1,
-    overflow: TextOverflow.ellipsis,
-  );
 }
 
 class _Tag {
@@ -944,29 +1422,22 @@ class _Tag {
 
 const _tagStyle = TextStyle(
   fontFamily: ColituText.family,
-  fontSize: 11.5,
+  fontSize: 12,
   height: 1.2,
   fontWeight: FontWeight.w500,
-  color: ColituColors.text,
-);
-const _pillStyle = TextStyle(
-  fontFamily: ColituText.family,
-  fontSize: 11,
-  height: 1.2,
-  fontWeight: FontWeight.w600,
   color: ColituColors.muted,
 );
-const _tagIcon = 14.0;
-const _tagIconGap = 4.0;
-const _tagSpacing = 8.0;
+const _tagIcon = 13.0;
+const _tagIconGap = 5.0;
+const _tagSpacing = 12.0;
 
-/// Tags shown on one row before the rest folds into "+N".
-const _maxTags = 2;
+/// Tags an open city row may show; the rest stay hidden.
+const _maxTags = 3;
 
 /// Slack per tag so rounding never squeezes a label into an ellipsis.
 const _tagSlack = 6.0;
 
-/// One line of tags: as many as fit, then "+N" for the rest.
+/// One quiet line of at most three tags, as many as fit.
 class _TagLine extends StatelessWidget {
   const _TagLine(this.tags);
 
@@ -988,7 +1459,6 @@ class _TagLine extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final max = constraints.maxWidth;
-        double pill(int n) => _textWidth('+$n', _pillStyle, scaler) + 18;
         var used = 0.0;
         var count = 0;
         for (var i = 0; i < tags.length && i < _maxTags; i++) {
@@ -998,22 +1468,15 @@ class _TagLine extends StatelessWidget {
               _tagIconGap +
               _textWidth(tags[i].label, _tagStyle, scaler);
           final next = used + (i == 0 ? 0 : _tagSpacing) + width;
-          final left = tags.length - i - 1;
-          final reserve = left > 0 ? _tagSpacing + pill(left) : 0;
-          if (next + reserve > max && i > 0) break;
+          if (next > max && i > 0) break;
           used = next;
           count = i + 1;
         }
-        final hidden = tags.length - count;
         return Row(
           children: [
             for (var i = 0; i < count; i++) ...[
               if (i > 0) const SizedBox(width: _tagSpacing),
               Flexible(child: _TagView(tags[i])),
-            ],
-            if (hidden > 0) ...[
-              const SizedBox(width: _tagSpacing),
-              _Pill('+$hidden'),
             ],
           ],
         );
@@ -1041,7 +1504,7 @@ class _TagView extends StatelessWidget {
               : Icon(
                   _categoryIcon(tag.category ?? ''),
                   size: _tagIcon - 1,
-                  color: ColituColors.text,
+                  color: ColituColors.muted,
                 ),
         ),
         const SizedBox(width: _tagIconGap),
@@ -1058,36 +1521,26 @@ class _TagView extends StatelessWidget {
   }
 }
 
-class _Pill extends StatelessWidget {
-  const _Pill(this.text, {this.accent = false});
+/// Signal bars and the ping in milliseconds, in calm tones; a new value
+/// cross-fades in.
+class _Ping extends StatelessWidget {
+  const _Ping(this.ms);
 
-  final String text;
-  final bool accent;
+  final int? ms;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-    decoration: BoxDecoration(
-      color: accent
-          ? ColituColors.violet.withValues(alpha: 0.22)
-          : ColituColors.surface2,
-      borderRadius: BorderRadius.circular(ColituRadius.pill),
-      border: Border.all(
-        color: accent ? Colors.transparent : ColituColors.line,
-      ),
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: _motion(context, const Duration(milliseconds: 220)),
+    layoutBuilder: (current, previous) => Stack(
+      alignment: Alignment.centerRight,
+      children: [...previous, ?current],
     ),
-    child: Text(
-      text,
-      style: _pillStyle.copyWith(
-        color: accent ? ColituColors.lilac : ColituColors.muted,
-      ),
-    ),
+    child: _PingView(ms, key: ValueKey(ms)),
   );
 }
 
-/// Signal bars and the ping in milliseconds.
-class _Ping extends StatelessWidget {
-  const _Ping(this.ms);
+class _PingView extends StatelessWidget {
+  const _PingView(this.ms, {super.key});
 
   final int? ms;
 
@@ -1097,10 +1550,10 @@ class _Ping extends StatelessWidget {
     final color = value == null
         ? ColituColors.dim
         : value < 60
-        ? ColituColors.success
+        ? ColituColors.success.withValues(alpha: 0.8)
         : value < 150
-        ? ColituColors.warning
-        : ColituColors.danger;
+        ? ColituColors.warning.withValues(alpha: 0.8)
+        : ColituColors.danger.withValues(alpha: 0.8);
     final bars = value == null
         ? 0
         : value < 60
@@ -1116,8 +1569,8 @@ class _Ping extends StatelessWidget {
       children: [
         for (var i = 0; i < 4; i++) ...[
           Container(
-            width: 3.5,
-            height: 6.0 + i * 3,
+            width: 3,
+            height: 5.0 + i * 3,
             decoration: BoxDecoration(
               color: i < bars ? color : ColituColors.lineStrong,
               borderRadius: BorderRadius.circular(1.5),
@@ -1125,40 +1578,18 @@ class _Ping extends StatelessWidget {
           ),
           if (i < 3) const SizedBox(width: 2),
         ],
-        const SizedBox(width: 6),
+        const SizedBox(width: 7),
         Text(
           value == null ? '—' : '$value ms',
-          style: ColituText.small.copyWith(color: ColituColors.muted),
+          style: ColituText.small.copyWith(
+            fontSize: 13,
+            color: ColituColors.muted,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
         ),
       ],
     );
   }
-}
-
-class _GoButton extends StatelessWidget {
-  const _GoButton({required this.active});
-
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) => AnimatedContainer(
-    duration: const Duration(milliseconds: 180),
-    width: _goSize,
-    height: _goSize,
-    decoration: BoxDecoration(
-      shape: BoxShape.circle,
-      gradient: active ? ColituGradients.accent : null,
-      color: active ? null : ColituColors.surface2,
-      border: Border.all(
-        color: active ? Colors.transparent : ColituColors.lineStrong,
-      ),
-    ),
-    child: Icon(
-      CupertinoIcons.chevron_right,
-      size: 14,
-      color: active ? ColituColors.onAccent : ColituColors.text,
-    ),
-  );
 }
 
 /// Small marks for the services a node opens. They are drawn here rather

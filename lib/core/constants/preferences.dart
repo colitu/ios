@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
 import 'package:colitu_vpn/core/db/database/constants.dart';
 import 'package:colitu_vpn/core/tools/json.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -344,14 +345,40 @@ class PreferencesKey {
       _prefs.setBool(_colituWarmSpare, value);
 
   /// The spare chosen for the prepared config (JSON, see warm_spare.dart).
-  Future<String?> readColituWarmSpareChoice() =>
-      _prefs.getString(_colituWarmSpareChoice);
+  /// It holds a full outbound with server credentials, so it lives in the
+  /// Keychain (this device only, never in a backup); a value an older
+  /// version left in the preferences is moved there on the first read. If
+  /// the Keychain cannot be used, there is simply no spare.
+  Future<String?> readColituWarmSpareChoice() async {
+    try {
+      final store = SecureTokenStore();
+      final legacy = await _prefs.getString(_colituWarmSpareChoice);
+      if (legacy != null) {
+        await store.saveWarmSpareChoice(legacy);
+        await _prefs.remove(_colituWarmSpareChoice);
+      }
+      return await store.readWarmSpareChoice();
+    } catch (_) {
+      return null;
+    }
+  }
 
-  Future<void> saveColituWarmSpareChoice(String value) =>
-      _prefs.setString(_colituWarmSpareChoice, value);
+  Future<void> saveColituWarmSpareChoice(String value) async {
+    try {
+      await SecureTokenStore().saveWarmSpareChoice(value);
+    } catch (_) {
+      // No Keychain: no spare rather than credentials in the preferences.
+    }
+  }
 
-  Future<void> clearColituWarmSpareChoice() =>
-      _prefs.remove(_colituWarmSpareChoice);
+  Future<void> clearColituWarmSpareChoice() async {
+    await _prefs.remove(_colituWarmSpareChoice);
+    try {
+      await SecureTokenStore().clearWarmSpareChoice();
+    } catch (_) {
+      // Keychain unavailable; the item goes with the next clear.
+    }
+  }
 
   static const _colituLastDropTs = "colituLastDropTs";
 
@@ -394,6 +421,15 @@ class PreferencesKey {
   Future<void> saveColituAdBlock(bool value) async {
     await _prefs.setBool(_colituAdBlock, value);
   }
+
+  static const _colituAdBlockDoh = "colituAdBlockDoh";
+
+  /// The ad-blocking resolvers the panel named last (comma-separated).
+  Future<String?> readColituAdBlockDoh() =>
+      _prefs.getString(_colituAdBlockDoh);
+
+  Future<void> saveColituAdBlockDoh(String value) =>
+      _prefs.setString(_colituAdBlockDoh, value);
 
   static const _colituPrivacyMode = "colituPrivacyMode";
 

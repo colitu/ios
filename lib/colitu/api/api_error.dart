@@ -37,6 +37,12 @@ enum APIErrorCode {
 
   /// The plan allows fewer devices than are active: this one is paused.
   deviceOverLimit,
+
+  /// The account waits for a review by the Colitu team.
+  accountUnderReview,
+
+  /// The account was blocked.
+  accountBlocked,
   unknown,
 }
 
@@ -299,6 +305,24 @@ class APIException implements Exception {
         return APIException(
           APIErrorCode.rateLimited,
           'Too many accounts were created from this network recently.',
+          statusCode: statusCode,
+        );
+      case 'ACCOUNT_UNDER_REVIEW':
+        return APIException(
+          APIErrorCode.accountUnderReview,
+          'Your account is being reviewed by our team.',
+          statusCode: statusCode,
+        );
+      case 'SIGNUP_BLOCKED':
+        return APIException(
+          APIErrorCode.unknown,
+          'This sign-up was not accepted.',
+          statusCode: statusCode,
+        );
+      case 'ACCOUNT_BLOCKED':
+        return APIException(
+          APIErrorCode.accountBlocked,
+          'This account has been blocked.',
           statusCode: statusCode,
         );
       case 'DEVICE_LIMIT_REACHED':

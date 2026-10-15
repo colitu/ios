@@ -139,7 +139,11 @@ void main() {
       );
       expect(
         ColituAcEvents.switched(from: 'hysteria2', to: null, ok: false, flap: false),
-        {'kind': 'switch', 'protocol': 'hysteria2', 'outcome': 'fail', 'flap': false},
+        isNull,
+      );
+      expect(
+        ColituAcEvents.switched(from: 'hysteria2', to: 'hysteria2', ok: false, flap: false),
+        {'kind': 'switch', 'protocol': 'hysteria2', 'to_protocol': 'hysteria2', 'outcome': 'fail', 'flap': false},
       );
       expect(
         ColituAcEvents.drop(nodeId: _n1, protocol: 'trojan', code: 'other', minutes: 12),
@@ -368,7 +372,7 @@ void main() {
       await metrics.idle();
       t.tryingConnect(nodeId: _n1, protocol: 'hysteria2', fallbacks: 0);
       now = now.add(const Duration(milliseconds: 2500));
-      t.functionalCheck(ok: true);
+      // endConnect counts the functional check (once per connect).
       t.endConnect(ok: true, nodeId: _n1, protocol: 'hysteria2', id: id);
       final snap = await metrics.snapshot();
       expect(snap.counters, {
@@ -470,6 +474,34 @@ void main() {
       expect(list[0]['to_protocol'], 'trojan');
       expect(list[1]['flap'], isFalse);
       expect(list[3]['flap'], isTrue);
+    });
+
+    test('a second begin while a recovery is open changes nothing', () async {
+      t.beginRecovery(
+        failedAt: now.subtract(const Duration(seconds: 10)),
+        protocol: 'hysteria2',
+        nodeId: _n1,
+      );
+      t.beginRecovery(failedAt: now, protocol: 'trojan', nodeId: _n1);
+      t.beginRecovery(failedAt: now, nodeId: _n1);
+      expect((await metrics.snapshot()).isEmpty, isTrue);
+      now = now.add(const Duration(seconds: 5));
+      t.endRecovery(ok: false);
+      final snap = await metrics.snapshot();
+      expect(snap.counters, {'recoveries': 1, 'protocol_switches': 1});
+      final list = await queued();
+      // No switch event: the recovery reached no protocol.
+      expect(list.map((e) => e['kind']), ['recovery']);
+      expect(list[0]['ms'], 15000);
+      expect(list[0]['protocol'], 'hysteria2');
+    });
+
+    test('an abandoned recovery counts nothing', () async {
+      t.beginRecovery(failedAt: now, protocol: 'hysteria2', nodeId: _n1);
+      t.abandonRecovery();
+      t.endRecovery(ok: true, newProtocol: 'trojan');
+      expect((await metrics.snapshot()).counters, isEmpty);
+      expect(await queued(), isEmpty);
     });
 
     test('an unexpected drop counts and sends a drop event with the minutes up', () async {

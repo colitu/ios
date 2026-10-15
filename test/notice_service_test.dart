@@ -111,6 +111,29 @@ void main() {
         isNull,
       );
     });
+
+    test('only Colitu hosts and build mirrors count as a link', () {
+      const mirrors = ['https://mirror.example.test'];
+      Uri? link(String url) => safeNoticeLink(url, mirrorOrigins: mirrors);
+      expect(link('https://colitu.com/pricing'), isNotNull);
+      expect(link('https://app.colitu.com/x'), isNotNull);
+      expect(link('https://COLITU.com/'), isNotNull);
+      expect(link('https://mirror.example.test/pricing'), isNotNull);
+      expect(link('https://evil.example.test/'), isNull);
+      expect(link('https://colitu.com.example.test/'), isNull);
+      expect(link('https://evilcolitu.com/'), isNull);
+      expect(link('https://colitu.com@evil.example.test/'), isNull);
+      expect(link('https://user@colitu.com/'), isNull);
+      expect(link('https://sub.mirror.example.test/'), isNull);
+      expect(link('http://colitu.com/'), isNull);
+      expect(link('colitu.com'), isNull);
+      expect(safeNoticeLink(null, mirrorOrigins: mirrors), isNull);
+      // Without mirrors only colitu.com counts.
+      expect(
+        safeNoticeLink('https://mirror.example.test/', mirrorOrigins: const []),
+        isNull,
+      );
+    });
   });
 
   group('pickNextNotice', () {

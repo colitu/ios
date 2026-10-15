@@ -24,6 +24,11 @@ abstract final class APIEndpoint {
   static String supportThread(String id) => '/support/conversations/${Uri.encodeComponent(id)}';
   static String supportMessages(String id) => '/support/conversations/${Uri.encodeComponent(id)}/messages';
   static String supportAttachment(String id) => '/support/attachments/${Uri.encodeComponent(id)}';
+  static const supportDiagnosticsRequest = '/support/diagnostics-request';
+  static String supportDiagnostics(String conversationId) =>
+      '/support/conversations/${Uri.encodeComponent(conversationId)}/diagnostics';
+  static String supportDiagnosticsReport(String requestId) =>
+      '/support/diagnostics-requests/${Uri.encodeComponent(requestId)}/report';
 
   static const userDevices = '/devices';
   static const registerDevice = '/devices/register';

@@ -26,6 +26,7 @@ class SecureTokenStore {
   static const _pendingEmailKey = 'colitu_pending_verification_email';
   static const _recoverySetKey = 'colitu_recovery_set';
   static const _recoveryAttemptKey = 'colitu_recovery_attempt';
+  static const _warmSpareChoiceKey = 'colitu_warm_spare_choice';
 
   static const _allKeys = [
     _accessTokenKey,
@@ -38,6 +39,7 @@ class SecureTokenStore {
     _runtimePolicyKey,
     _pendingEmailKey,
     _recoverySetKey,
+    _warmSpareChoiceKey,
     _recoveryAttemptKey,
   ];
 
@@ -185,6 +187,16 @@ class SecureTokenStore {
   Future<void> saveRecoveryAttempt(int epochMs) =>
       _write(_recoveryAttemptKey, '$epochMs');
 
+  /// The warm spare chosen for the prepared config: its full outbound
+  /// (server credentials), so it is kept with the other configuration here
+  /// instead of in the backed-up preferences.
+  Future<String?> readWarmSpareChoice() => _read(_warmSpareChoiceKey);
+
+  Future<void> saveWarmSpareChoice(String value) =>
+      _write(_warmSpareChoiceKey, value);
+
+  Future<void> clearWarmSpareChoice() => _delete(_warmSpareChoiceKey);
+
   /// Set while the signed-in account still has to confirm this e-mail.
   Future<String?> readPendingVerificationEmail() async {
     final value = await _read(_pendingEmailKey);
@@ -240,6 +252,7 @@ class SecureTokenStore {
       await _delete(_pendingEmailKey);
       await _delete(_recoverySetKey);
       await _delete(_recoveryAttemptKey);
+      await _delete(_warmSpareChoiceKey);
     });
   }
 }

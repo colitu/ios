@@ -93,6 +93,7 @@ extern void CGoFreeOSMemory(void);
 extern void CGoSetMaxProcs(int n);
 extern long long CGoGoSysBytes(void);
 extern void CGoGoMemStats(long long* out);
+extern int CGoGoroutineProfile(char* buf, int n);
 extern void CGoResetHysteria(void);
 extern char* CGoInitDns(char* base64Text);
 extern char* CGoResetDns(void);

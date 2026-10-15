@@ -462,6 +462,18 @@ class _FakeTokenStore implements SecureTokenStore {
   @override
   Future<void> clearRecoverySet() async => recoverySet = null;
 
+  String? warmSpareChoice;
+
+  @override
+  Future<String?> readWarmSpareChoice() async => warmSpareChoice;
+
+  @override
+  Future<void> saveWarmSpareChoice(String value) async =>
+      warmSpareChoice = value;
+
+  @override
+  Future<void> clearWarmSpareChoice() async => warmSpareChoice = null;
+
   @override
   Future<int?> readRecoveryAttempt() async => recoveryAttempt;
 

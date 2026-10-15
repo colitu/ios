@@ -37,6 +37,7 @@ import UIKit
         setUpPasteboardImage(binaryMessenger: binaryMessenger)
         startNetworkTransitionMonitor(binaryMessenger: binaryMessenger)
         setUpTunnelChannel(binaryMessenger: binaryMessenger)
+        setUpBackupExclusion(binaryMessenger: binaryMessenger)
         
         GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     }
@@ -52,6 +53,27 @@ import UIKit
             Task {
                 let ok = await VPNManager.shared.reloadCore()
                 await MainActor.run { result(ok) }
+            }
+        }
+    }
+
+    /// Keeps a directory (database, tunnel run files with server
+    /// credentials) out of iCloud and computer backups.
+    private func setUpBackupExclusion(binaryMessenger: FlutterBinaryMessenger) {
+        let channel = FlutterMethodChannel(name: "colitu/backup", binaryMessenger: binaryMessenger)
+        channel.setMethodCallHandler { call, result in
+            guard call.method == "excludeFromBackup", let path = call.arguments as? String else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            var url = URL(fileURLWithPath: path)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            do {
+                try url.setResourceValues(values)
+                result(true)
+            } catch {
+                result(false)
             }
         }
     }

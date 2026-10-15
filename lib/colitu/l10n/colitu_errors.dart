@@ -54,6 +54,12 @@ String colituErrorMessage(Object error, {bool signingIn = false}) {
         return loc['err.passwordBreached'];
       case 'SIGNUP_IP_LIMIT':
         return loc['err.signupIpLimit'];
+      case 'ACCOUNT_UNDER_REVIEW':
+        return loc['err.accountUnderReview'];
+      case 'SIGNUP_BLOCKED':
+        return loc['err.signupBlocked'];
+      case 'ACCOUNT_BLOCKED':
+        return loc['err.accountBlocked'];
       case 'RATE_LIMITED':
         return loc['err.rateLimited'];
       case 'DEVICE_LIMIT_REACHED':
@@ -140,6 +146,10 @@ String colituErrorMessage(Object error, {bool signingIn = false}) {
         return loc['mfa.err.update'];
       case APIErrorCode.deviceOverLimit:
         return loc['paused.title'];
+      case APIErrorCode.accountUnderReview:
+        return loc['err.accountUnderReview'];
+      case APIErrorCode.accountBlocked:
+        return loc['err.accountBlocked'];
       case APIErrorCode.mfaRequired:
         return loc['mfa.title'];
       case APIErrorCode.emailNotVerified:

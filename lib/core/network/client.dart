@@ -112,14 +112,26 @@ class NetClient {
   }
 
   /// Generic connectivity endpoints (never the Colitu API): each answers
-  /// 204 or a short 200 from a nearby edge.
+  /// 204 or a short 200 from a nearby edge. No Cloudflare: it is throttled
+  /// in Russia, also behind a Russian exit.
   static const trafficCheckUrls = [
-    'https://cp.cloudflare.com/generate_204',
     'https://www.gstatic.com/generate_204',
     'http://www.msftconnecttest.com/connecttest.txt',
   ];
 
-  /// True as soon as one of [trafficCheckUrls] answers 2xx. Used through the
+  /// The server's own probe (nginx on :3443 of the node, answers 204).
+  static String serverCheckUrl(String host) => 'https://$host:3443/ping';
+
+  /// [trafficCheckUrls], led by the server's probe when [serverHost] (a
+  /// node's name) is known. Not every node runs it; the others still decide.
+  static List<String> trafficCheckUrlsFor(String? serverHost) {
+    final host = serverHost?.trim() ?? '';
+    final usable =
+        host.isNotEmpty && !host.contains(':') && InternetAddress.tryParse(host) == null;
+    return [if (usable) serverCheckUrl(host), ...trafficCheckUrls];
+  }
+
+  /// True as soon as one of [trafficCheckUrlsFor] answers 2xx. Used through the
   /// tunnel right after it comes up and while it runs: the requests go out in
   /// parallel and the first success decides. A fresh client avoids reusing
   /// sockets that were opened before the tunnel.
@@ -129,7 +141,9 @@ class NetClient {
   Future<bool> trafficCheck({
     Duration timeout = const Duration(seconds: 3),
     String? proxy,
+    String? serverHost,
   }) async {
+    final urls = trafficCheckUrlsFor(serverHost);
     final client = Dio(
       BaseOptions(
         connectTimeout: timeout,
@@ -144,7 +158,7 @@ class NetClient {
       );
     }
     final done = Completer<bool>();
-    var pending = trafficCheckUrls.length;
+    var pending = urls.length;
     Future<void> probe(String url) async {
       try {
         final response = await client.get<String>(
@@ -167,7 +181,7 @@ class NetClient {
       }
     }
 
-    for (final url in trafficCheckUrls) {
+    for (final url in urls) {
       unawaited(probe(url));
     }
     try {

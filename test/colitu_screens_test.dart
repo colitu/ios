@@ -215,6 +215,48 @@ void main() {
     c.dispose();
   });
 
+  // Germany with three cities; connected to Berlin while the automatic
+  // choice is on, so the country starts closed.
+  ColituConnectionController groupController() => _controller()
+    ..servers = _groupServers
+    ..status = ColituVpnStatus.connected
+    ..connectedServer = _groupServers.firstWhere((s) => s.id == 'de2');
+
+  testWidgets('locations: country group closed', skip: !comparePlatform, (
+    tester,
+  ) async {
+    final c = groupController();
+    await shoot(
+      tester,
+      _shell(LocationsTab(controller: c, onOpenPlan: () {}), index: 1),
+      'locations_group_closed',
+    );
+    c.dispose();
+  });
+
+  testWidgets('locations: country group open', skip: !comparePlatform, (
+    tester,
+  ) async {
+    final c = groupController();
+    await pumpPage(
+      tester,
+      _shell(LocationsTab(controller: c, onOpenPlan: () {}), index: 1),
+    );
+    await tester.tap(find.text('3 konum'));
+    // Open animation (250 ms), then scroll the open card into view.
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.drag(find.byType(ListView), const Offset(0, -330));
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump(const Duration(milliseconds: 600));
+    await precacheImages(tester);
+    await expectLater(
+      find.byType(MaterialApp),
+      matchesGoldenFile('goldens/locations_group_open.png'),
+    );
+    c.dispose();
+  });
+
   testWidgets('support: requests', skip: !comparePlatform, (tester) async {
     final c = _controller()..supportUnread = 1;
     await shoot(
@@ -490,6 +532,47 @@ final _servers = [
     'city': 'İstanbul',
     'available': false,
     'load': 0,
+  }),
+];
+
+/// [_servers] with Germany split into three cities (fake hosts).
+final _groupServers = [
+  for (final s in _servers)
+    if (s.id != 'de1') s,
+  VPNServer.fromJson({
+    'id': 'de1',
+    'name': 'Almanya',
+    'countryCode': 'DE',
+    'city': 'Frankfurt',
+    'host': 'fra.example.test',
+    'available': true,
+    'load': 52,
+    'ping': 46,
+    'categories': ['gaming', 'speed'],
+    'services': ['chatgpt', 'gemini', 'claude', 'netflix'],
+  }),
+  VPNServer.fromJson({
+    'id': 'de2',
+    'name': 'Almanya',
+    'countryCode': 'DE',
+    'city': 'Berlin',
+    'host': 'ber.example.test',
+    'available': true,
+    'load': 34,
+    'ping': 52,
+    'categories': ['privacy'],
+    'services': ['youtube_adfree', 'chatgpt'],
+  }),
+  VPNServer.fromJson({
+    'id': 'de3',
+    'name': 'Almanya',
+    'countryCode': 'DE',
+    'city': 'Nürnberg',
+    'host': 'nue.example.test',
+    'available': true,
+    'load': 61,
+    'ping': 71,
+    'categories': ['torrent'],
   }),
 ];
 

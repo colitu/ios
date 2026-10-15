@@ -10,7 +10,7 @@ import 'package:colitu_vpn/colitu/services/colitu_metrics.dart';
 /// Adaptive Connect telemetry: one small event per connect, recovery,
 /// protocol switch, drop, latency probe and automatic choice, queued on the
 /// device and sent at most hourly to `POST /client/ac-events`. Only
-/// collected while the "anonymous usage statistics" switch is on (the same
+/// collected while the "usage statistics" switch is on (the same
 /// switch as the counters). Events name nodes (UUIDs of the server list) and
 /// protocols, never an account, an address or a site. Mirrors the Android
 /// `ColituAcEvents`.
@@ -89,6 +89,8 @@ abstract final class ColituAcEvents {
         APIErrorCode.emailNotVerified ||
         APIErrorCode.subscriptionInactive ||
         APIErrorCode.premiumRequired ||
+        APIErrorCode.accountUnderReview ||
+        APIErrorCode.accountBlocked ||
         APIErrorCode.serverNotAllowed => 'auth',
         APIErrorCode.freeDailyLimitReached => 'quota',
         _ => 'other',
@@ -193,12 +195,16 @@ abstract final class ColituAcEvents {
     required bool flap,
   }) {
     final p = _protocol(from);
-    if (p == null) return null;
     final target = _protocol(to);
+    // The panel needs both ends, and a report with one invalid event is
+    // refused whole: a recovery that reached no protocol is told by its
+    // recovery event alone. Sending it anyway lost every hourly batch with a
+    // failed recovery in it, so the panel only ever saw iOS successes.
+    if (p == null || target == null) return null;
     return {
       'kind': 'switch',
       'protocol': p,
-      'to_protocol': ?target,
+      'to_protocol': target,
       'outcome': _outcome(ok),
       'flap': flap,
     };
@@ -376,7 +382,7 @@ class AcQueue {
 }
 
 /// Local queue and hourly sender of the Adaptive Connect events. Shares the
-/// "anonymous usage statistics" switch with [ColituMetrics].
+/// "usage statistics" switch with [ColituMetrics].
 class ColituAcEventStore {
   ColituAcEventStore({
     required ColituMetrics metrics,

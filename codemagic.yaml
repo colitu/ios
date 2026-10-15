@@ -490,6 +490,9 @@ workflows:
           BUILD_NUMBER="${PROJECT_BUILD_NUMBER:-${BUILD_NUMBER:-${PUBSPEC_BUILD_NUMBER:-1}}}"
 
           echo "Building version $BUILD_NAME+$BUILD_NUMBER"
+          # The packet-tunnel extension carries the app's version and build
+          # (its target has no Flutter build settings of its own).
+          python3 scripts/sync-extension-version.py "$BUILD_NAME" "$BUILD_NUMBER"
           test "${COLITU_API_BASE_URL:-}" = "https://api.colitu.com/api/v1" || {
             echo "COLITU_API_BASE_URL must target the production client API"
             exit 1

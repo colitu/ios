@@ -18,7 +18,7 @@ extension OutboundStatePing on OutboundState {
     final xrayJson = XrayJsonStandard.standard;
     xrayJson.outbounds = [this.xrayJson];
     xrayJson.inbounds = [pingInbound.xrayJson];
-    final res = await xrayJson.ping(pingState, ports.pingPort);
+    final res = await xrayJson.ping(pingState, pingInbound.proxyUrl);
     return res;
   }
 }

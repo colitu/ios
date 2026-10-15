@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
+import 'package:colitu_vpn/colitu/services/site_redaction.dart';
 import 'package:colitu_vpn/colitu/services/support_service.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
@@ -279,6 +280,18 @@ class _NewRequestState extends State<_NewRequest> {
         files: List.of(_files),
         diagnostics: report,
       );
+      if (report != null && created != null) {
+        // The full report (tunnel stops, stability events, error logs) goes
+        // to the new conversation in the background; the short summary above
+        // already went with the request, so a failure here is ignored.
+        final service = widget.service;
+        final hosts = SiteRedaction.serverHosts(c.servers);
+        unawaited(() async {
+          try {
+            await service.uploadDiagnostics(created.id, await ColituSupportService.connectionReport(knownHosts: hosts));
+          } catch (_) {}
+        }());
+      }
       if (!mounted) return;
       showColituToast(context, loc['support.sent']);
       await widget.onCreated(created);

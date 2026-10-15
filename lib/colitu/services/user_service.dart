@@ -1,5 +1,6 @@
 import 'package:colitu_vpn/colitu/api/api_client.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
+import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 
 class UserService {
@@ -25,6 +26,8 @@ class UserService {
           : const [];
       return list
           .whereType<Map<String, dynamic>>()
+          // Removed devices (revoked_at set) neither show nor count.
+          .where((d) => d['revoked_at'] == null && d['revokedAt'] == null)
           .map(ColituDevice.fromJson)
           .toList();
     });
@@ -40,10 +43,15 @@ class UserService {
     );
   }
 
-  Future<void> disconnectDevice(String id) {
-    return _client.delete(
-      '${APIEndpoint.userDevices}/${Uri.encodeComponent(id)}',
-      (_) {},
-    );
+  Future<void> disconnectDevice(String id) async {
+    try {
+      await _client.delete(
+        '${APIEndpoint.userDevices}/${Uri.encodeComponent(id)}',
+        (_) {},
+      );
+    } on APIException catch (e) {
+      // Already removed (on the site or another app): the goal is reached.
+      if (e.backendCode != 'DEVICE_NOT_FOUND') rethrow;
+    }
   }
 }

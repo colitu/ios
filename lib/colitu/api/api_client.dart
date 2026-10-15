@@ -4,8 +4,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
+import 'package:colitu_vpn/colitu/api/body_limit.dart';
 import 'package:colitu_vpn/colitu/api/cert_pins.dart';
 import 'package:colitu_vpn/colitu/api/endpoint_list.dart';
+import 'package:colitu_vpn/colitu/api/language_interceptor.dart';
 import 'package:colitu_vpn/colitu/api/models/auth_models.dart';
 import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
@@ -40,8 +42,10 @@ class APIClient {
       ),
     );
     // Pinned trust (see CertPins); the log goes before the failover.
-    dio.httpClientAdapter = CertPins.adapter();
+    dio.httpClientAdapter = BodyLimitAdapter(CertPins.adapter());
     dio.interceptors.add(CertPinLogInterceptor());
+    // The app language on every request (the panel's users.locale).
+    dio.interceptors.add(LanguageInterceptor());
     if (EndpointManager.instance.enabled) {
       dio.interceptors.add(ApiFailoverInterceptor(dio, EndpointManager.instance));
     }
@@ -202,6 +206,7 @@ class APIClient {
         options: Options(
           responseType: ResponseType.bytes,
           receiveTimeout: const Duration(seconds: 60),
+          extra: const {BodyLimitAdapter.extraKey: maxDownloadBytes},
           headers: {
             'X-App-Name': AppEnvironment.appName,
             'X-Client-Platform': _clientPlatform,

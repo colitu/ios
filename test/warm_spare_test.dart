@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
+import 'package:colitu_vpn/colitu/services/tunnel_inbounds.dart';
 import 'package:colitu_vpn/colitu/services/warm_spare.dart';
 import 'package:colitu_vpn/service/xray/outbound/state.dart';
 import 'package:colitu_vpn/service/xray/setting/state.dart';
@@ -303,8 +304,13 @@ void main() {
       return s;
     }
 
-    Map<String, dynamic> json(XraySettingState s) =>
-        jsonDecode(jsonEncode(s.xrayJson.toJson())) as Map<String, dynamic>;
+    // As the VPN service writes it: without the ping inbound, which carries
+    // fresh random credentials per state (tunnel_inbounds.dart).
+    Map<String, dynamic> json(XraySettingState s) {
+      final config = s.xrayJson;
+      ColituTunnelInbounds.stripPing(config);
+      return jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>;
+    }
 
     List<String> targets(Map<String, dynamic> config) => [
       for (final r in (config['routing'] as Map)['rules'] as List)

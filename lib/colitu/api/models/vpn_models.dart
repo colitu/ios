@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 
@@ -449,9 +450,9 @@ class VPNConfig {
   }
 
   bool get hasConnectionPayload {
-    return _hasText(rawConfig) ||
-        _hasText(subscriptionUrl) ||
-        outboundCandidates.isNotEmpty ||
+    // rawConfig / subscriptionUrl are never used to connect (see
+    // ColituVpnConfigAdapter.prepareConnectionConfig).
+    return outboundCandidates.isNotEmpty ||
         (outboundConfig != null && outboundConfig!.isNotEmpty);
   }
 
@@ -601,6 +602,10 @@ class VPNStatus {
   /// when the panel does not say.
   final TrialTransition? trial;
 
+  /// The ad-blocking resolvers (`ad_block.doh`); null when the answer has
+  /// no such field.
+  final List<String>? adBlockDoh;
+
   const VPNStatus({
     required this.authenticated,
     required this.subscriptionActive,
@@ -613,6 +618,7 @@ class VPNStatus {
     this.maintenanceActive = false,
     this.maintenanceMessage,
     this.trial,
+    this.adBlockDoh,
   });
 
   /// Connecting is refused for a reason other than the plan (app policy or
@@ -650,6 +656,7 @@ class VPNStatus {
         trial: status == 'trialing' || status == 'trial_active'
             ? TrialTransition.fromBootstrap(entitlement, source)
             : null,
+        adBlockDoh: ColituAdBlock.serversOf(source),
       );
     }
     return VPNStatus(
@@ -920,8 +927,6 @@ int _intValue(Object? value) {
   return 0;
 }
 
-bool _hasText(String? value) => value != null && value.trim().isNotEmpty;
-
 bool _isSyntheticServerName(String value) {
   return value.trim().toLowerCase() == 'vpn server';
 }
@@ -954,11 +959,13 @@ int? _loadPercent(Object? value) {
 final _hopPortsPattern = RegExp(r'^\d{4,5}-\d{4,5}$');
 
 /// Port hopping for Hysteria2: the client moves its QUIC flow to another
-/// server port every few seconds, so networks that throttle one long-lived
-/// UDP flow (Russian mobile operators) do not stall a call. Xray 26 reads it
-/// from streamSettings.finalmask.quicParams.udpHop; the older
-/// hysteriaSettings.udphop shape is ignored there. Returns null (no change
-/// to the config) when the panel sends no valid range.
+/// server port (and a new local socket) every few seconds, so networks that
+/// throttle one long-lived UDP flow (Russian mobile operators) do not stall
+/// a call. Since Xray 26.9.8 it is the "udphop" UDP mask in
+/// streamSettings.finalmask.udp; the earlier finalmask.quicParams.udpHop and
+/// hysteriaSettings.udphop shapes are silently ignored. The core refuses an
+/// interval under 5 s. Returns null (no change to the config) when the
+/// panel sends no valid range.
 Map<String, dynamic>? _hysteriaPortHop(Map<String, dynamic> transport) {
   final ports = '${transport['hop_ports'] ?? ''}'.trim();
   if (!_hopPortsPattern.hasMatch(ports)) return null;
@@ -968,12 +975,20 @@ Map<String, dynamic>? _hysteriaPortHop(Map<String, dynamic> transport) {
   }
   final interval = _intOrNull(transport['hop_interval']);
   return {
-    'quicParams': {
-      'udpHop': {
-        'ports': ports,
-        'interval': '${interval != null && interval > 0 ? interval : 30}',
+    'udp': [
+      {
+        'type': 'udphop',
+        'settings': {
+          'mode': 'intervalLocal,intervalRemote',
+          'interval': interval == null || interval <= 0
+              ? 30
+              : interval < 5
+              ? 5
+              : interval,
+          'remotePorts': ports,
+        },
       },
-    },
+    ],
   };
 }
 

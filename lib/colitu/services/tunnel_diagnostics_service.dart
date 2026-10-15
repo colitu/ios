@@ -54,6 +54,11 @@ class TunnelDiagnosticsService {
         p.join(dir, XrayStateConstants.errorLog),
         maxBytes: 48 << 10,
       ),
+      await _section(
+        'Core goroutines at the last memory restart (goroutines.txt)',
+        p.join(dir, 'goroutines.txt'),
+        maxBytes: 24 << 10,
+      ),
     ];
     return sections.join('\n\n');
   }

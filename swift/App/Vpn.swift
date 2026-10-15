@@ -460,17 +460,20 @@ class VPNManager {
     /// drops it while the tunnel is connecting or reconnecting, instead of
     /// letting it out unprotected; the extension's own sockets stay exempt.
     /// `enforceRoutes` keeps more specific routes of the local network from
-    /// overriding the tunnel's. Local networks (printers, AirDrop, AirPlay,
-    /// CarPlay over Wi-Fi) stay reachable outside the tunnel either way.
+    /// overriding the tunnel's. In strict mode the local network goes into
+    /// the tunnel too: a hostile Wi-Fi could otherwise declare a wide "local"
+    /// subnet and pull public addresses outside it (TunnelCrack LocalNet).
+    /// Printers, AirPlay and CarPlay over Wi-Fi are then unreachable. In the
+    /// normal mode the local network stays outside the tunnel.
     private func applyTrafficCapture(_ vpn: NETunnelProviderManager, strict: Bool) {
         guard let conf = vpn.protocolConfiguration else { return }
         if #available(iOS 14.2, macOS 11.0, *) {
             conf.includeAllNetworks = strict
-            conf.excludeLocalNetworks = true
+            conf.excludeLocalNetworks = !strict
             conf.enforceRoutes = strict
         }
         vpn.protocolConfiguration = conf
-        YGLog("VPN traffic capture includeAllNetworks=\(strict) enforceRoutes=\(strict) excludeLocalNetworks=true")
+        YGLog("VPN traffic capture includeAllNetworks=\(strict) enforceRoutes=\(strict) excludeLocalNetworks=\(!strict)")
     }
 
 

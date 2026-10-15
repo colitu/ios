@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/l10n/server_names.dart';
 import 'package:flutter/foundation.dart';
 import 'package:colitu_vpn/core/constants/preferences.dart';
 
@@ -99,12 +100,42 @@ class ColituLoc extends ChangeNotifier {
     return 'many';
   }
 
-  String countryName(String code) {
+  String countryName(String code, {String? language}) {
     final values = _countries[code.toUpperCase()];
     if (values == null) return code.toUpperCase();
-    final index = languages.indexOf(_language);
+    final index = languages.indexOf(language ?? _language);
     return values[index < 0 ? 0 : index];
   }
+
+  bool hasCountry(String code) => _countries.containsKey(code.toUpperCase());
+
+  /// The code of a country named in any of the three languages or by a
+  /// common alias ("Almanya", "Germany", "Германия", "UK"), compared case-
+  /// and diacritic-insensitively; null for anything else.
+  String? countryCodeForName(String name) {
+    final key = ColituServerNames.normalize(name);
+    if (key.isEmpty) return null;
+    return (_countryIndex ??= {
+      for (final entry in _countries.entries)
+        for (final value in entry.value)
+          ColituServerNames.normalize(value): entry.key,
+      for (final entry in _countryAliases.entries)
+        for (final value in entry.value)
+          ColituServerNames.normalize(value): entry.key,
+    })[key];
+  }
+
+  static Map<String, String>? _countryIndex;
+
+  static const _countryAliases = <String, List<String>>{
+    'AE': ['UAE', 'Birleşik Arap Emirlikleri', 'Объединённые Арабские Эмираты'],
+    'CZ': ['Czech Republic', 'Çek Cumhuriyeti', 'Чешская Республика'],
+    'GB': ['UK', 'Great Britain', 'England', 'İngiltere', 'Британия', 'Англия'],
+    'KR': ['Korea', 'Kore', 'Корея'],
+    'NL': ['Holland', 'The Netherlands', 'Голландия'],
+    'TR': ['Turkey', 'Turkiye'],
+    'US': ['USA', 'United States of America', 'Amerika', 'Amerika Birleşik Devletleri', 'Соединённые Штаты'],
+  };
 
   /// "24 сентября 2026" / "24 Eylül 2026" / "24 September 2026".
   String date(DateTime value) {
@@ -580,6 +611,12 @@ class ColituLoc extends ChangeNotifier {
       'Search country or city',
     ],
     'locations.empty': ['Ничего не найдено', 'Sonuç bulunamadı', 'Nothing found'],
+    // While the VPN is on, pings are the last direct readings.
+    'locations.pingCached': [
+      'Пинг — последний замер до подключения',
+      'Ping, bağlanmadan önceki son ölçüm',
+      'Ping is the last reading from before you connected',
+    ],
     'service.youtube_adfree': ['YouTube без рекламы', 'Reklamsız YouTube', 'Ad-free YouTube'],
     // Country header with several cities (counted noun, see ColituLoc.count)
     'locationCount.one': ['{n} локация', '{n} konum', '{n} location'],
@@ -981,6 +1018,21 @@ class ColituLoc extends ChangeNotifier {
       'С этой сети недавно создано слишком много аккаунтов. Попробуйте позже.',
       'Bu ağdan kısa sürede çok fazla hesap oluşturuldu. Lütfen daha sonra tekrar deneyin.',
       'Too many accounts were created from this network recently. Please try again later.',
+    ],
+    'err.accountUnderReview': [
+      'Ваш аккаунт проверяется нашей командой. Вы сможете войти после одобрения; если есть вопросы, напишите в поддержку.',
+      'Hesabınız ekibimiz tarafından inceleniyor. Onaylandığında giriş yapabilirsiniz; sorunuz varsa destekle iletişime geçin.',
+      'Your account is being reviewed by our team. You can sign in once it is approved; contact support if you have questions.',
+    ],
+    'err.signupBlocked': [
+      'Эта регистрация не принята. Если вы считаете это ошибкой, напишите в поддержку.',
+      'Bu kayıt kabul edilmedi. Bir hata olduğunu düşünüyorsanız destekle iletişime geçin.',
+      'This sign-up was not accepted. If you think this is a mistake, contact support.',
+    ],
+    'err.accountBlocked': [
+      'Этот аккаунт заблокирован. Если вы считаете это ошибкой, напишите в поддержку.',
+      'Bu hesap engellendi. Bir hata olduğunu düşünüyorsanız destekle iletişime geçin.',
+      'This account has been blocked. If you think this is a mistake, contact support.',
     ],
     'auth.registerHint': [
       'Временные (одноразовые) адреса электронной почты не принимаются.',
@@ -1392,9 +1444,9 @@ class ColituLoc extends ChangeNotifier {
     // Strict kill switch (iOS includeAllNetworks)
     'killSwitch.title': ['Блокировать интернет без VPN', 'VPN yokken interneti engelle', 'Block internet without VPN'],
     'killSwitch.hint': [
-      'Ничего не уходит с телефона мимо VPN, даже пока он переподключается. Пока VPN включён, не откроются страницы входа в Wi-Fi (отели, аэропорты), а обновление Colitu из App Store может зависнуть, пока вы не выключите VPN. Устройства в локальной сети (принтеры, AirDrop, CarPlay) работают.',
-      'VPN yeniden bağlanırken bile hiçbir trafik VPN dışından çıkmaz. VPN açıkken otel ve havalimanı Wi-Fi giriş sayfaları açılmaz; Colitu\'nun App Store güncellemesi VPN\'i kapatana kadar takılabilir. Yerel ağdaki cihazlar (yazıcı, AirDrop, CarPlay) çalışır.',
-      'Nothing leaves the phone outside the VPN, not even while it reconnects. While the VPN is on, Wi-Fi sign-in pages (hotels, airports) cannot open, and an App Store update of Colitu can stall until you turn the VPN off. Devices on your local network (printers, AirDrop, CarPlay) keep working.',
+      'Ничего не уходит с телефона мимо VPN, даже пока он переподключается. Пока VPN включён, не откроются страницы входа в Wi-Fi (отели, аэропорты), а обновление Colitu из App Store может зависнуть, пока вы не выключите VPN. Локальная сеть тоже идёт через VPN: принтеры, AirPlay и CarPlay по Wi-Fi недоступны, зато чужая Wi-Fi-сеть не сможет вывести трафик мимо VPN под видом «локального».',
+      'VPN yeniden bağlanırken bile hiçbir trafik VPN dışından çıkmaz. VPN açıkken otel ve havalimanı Wi-Fi giriş sayfaları açılmaz; Colitu\'nun App Store güncellemesi VPN\'i kapatana kadar takılabilir. Yerel ağ da VPN\'den geçer: yazıcı, AirPlay ve kablosuz CarPlay\'e erişilemez; buna karşılık sahte bir Wi-Fi trafiği “yerel ağ” diye VPN dışına çekemez.',
+      'Nothing leaves the phone outside the VPN, not even while it reconnects. While the VPN is on, Wi-Fi sign-in pages (hotels, airports) cannot open, and an App Store update of Colitu can stall until you turn the VPN off. Your local network goes through the VPN too: printers, AirPlay and wireless CarPlay cannot be reached, and in return a hostile Wi-Fi cannot pull traffic outside the VPN as “local”.',
     ],
     // Split tunneling
     'split.title': ['Раздельное туннелирование', 'Bölünmüş tünel', 'Split tunneling'],
@@ -1724,14 +1776,14 @@ class ColituLoc extends ChangeNotifier {
       'The invite programme is switched off right now.',
     ],
     'stats.title': [
-      'Анонимная статистика использования',
-      'Anonim kullanım istatistikleri',
-      'Anonymous usage statistics',
+      'Статистика использования',
+      'Kullanım istatistikleri',
+      'Usage statistics',
     ],
     'stats.hint': [
-      'Отправляются только суммарные числа (успешность подключений, время, используемые функции); аккаунт, устройство, IP и посещённые сайты не отправляются.',
-      'Yalnızca toplu sayılar (bağlantı başarısı, süreler, kullanılan özellikler) gönderilir; hesap, cihaz, IP veya ziyaret edilen siteler gönderilmez.',
-      'Only aggregate numbers (connection success, timings, features used) are sent; your account, device, IP address or visited sites are never sent.',
+      'Отправляются счётчики (успех подключения, тайминги, используемые функции) и события подключения (сервер, успех или ошибка, время, страна и провайдер вашей сети в виде подписанного кода). Они идут через ваше авторизованное подключение, как любой запрос, но сервер хранит только суточные суммы без привязки к аккаунту и устройству и никогда не записывает ваш IP-адрес и посещённые сайты. Это можно отключить.',
+      'Sayaçlar (bağlantı başarısı, süreler, kullanılan özellikler) ve bağlantı olayları (sunucu, başarı ya da hata, süreler, ağınızın ülkesi ve sağlayıcısı imzalı bir kod olarak) gönderilir. Her istek gibi oturum açmış bağlantınız üzerinden gider; sunucu yalnızca günlük toplamları saklar, hesabınıza veya cihazınıza bağlamaz, IP adresinizi ve ziyaret ettiğiniz siteleri hiç kaydetmez. Bunu kapatabilirsiniz.',
+      'Sends counters (connection success, timings, features used) and connection events (server, success or failure, times, your network\'s country and provider as a signed code). They go over your signed-in connection like every request, but the server keeps only daily totals, not linked to your account or device, and never records your IP address or the sites you visit. You can turn this off.',
     ],
     'surveys.title': [
       'Показывать опросы',

@@ -4,6 +4,54 @@ Notable changes to Colitu VPN for iOS. The app is distributed through
 TestFlight (<https://testflight.apple.com/join/fnVUd6GQ>); release notes in
 Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>.
 
+## 5.9.1
+
+- **Split tunneling now applies your site list.** Sites (domains) in the
+  list and the "Only selected sites use Colitu" mode were not passed to the
+  VPN engine before; only IP addresses and ranges were. From this version the
+  saved list works as described. If you chose "only selected sites", every
+  site that is not on your list now goes outside the VPN, as that mode
+  promises; check the list after updating.
+- Xray engine 26.10.10 (with Go 1.27.2 and the latest HTTP/2 fixes).
+- "Fast" (Hysteria2) port hopping uses the engine's new setting, so it keeps
+  working with the new engine.
+- Strict kill switch: the local network goes through the VPN too (printers,
+  AirPlay and wireless CarPlay are unreachable while it is on), so a hostile
+  Wi-Fi cannot pull traffic outside the VPN as "local".
+- The app's data (including the active connection profile) is kept outside
+  iCloud and computer backups; the spare server's settings are in the
+  Keychain (this device only).
+- The app switcher shows the Colitu screen instead of the page; recovery
+  codes are hidden while typed; server and city names follow the app
+  language.
+- No local proxy without a password while connected or while measuring.
+- Ad-blocking servers come from your account and can change without an app
+  update.
+- Usage statistics: the setting now says exactly what is sent (counters and
+  connection events with your network's country and provider; the server
+  keeps only daily totals, not linked to your account or device).
+- Connection reports for support: when you write to support, the full
+  connection report (tunnel stops, stability events, error logs) goes with
+  the new conversation. Support can also request a connection report for
+  your device; the app then sends it without asking. Before any report
+  leaves the device, the names and addresses of the sites you visited are
+  masked; passwords, keys and tokens are removed.
+- Steadier connection (from a long iPhone test): the tunnel checks itself
+  through the server's own probe first; it no longer restarts again and
+  again while the phone itself has no internet (at most about 75 seconds,
+  then it restarts anyway); the app no longer tears down a tunnel that is
+  restarting by itself, and an automatic reconnect without network waits
+  for the network instead of leaving the VPN off.
+- Memory: when the tunnel gets close to iOS's memory limit it keeps fewer
+  idle connections open (idle connections close after 3 minutes), so iOS
+  is less likely to stop it.
+- The app sends its language to Colitu, so notifications and e-mails come
+  in that language.
+- Clear messages for an account under review, a declined sign-up and a
+  blocked account.
+- Devices removed on the site or in another app no longer show in the
+  device list, and removing one that is already gone no longer fails.
+
 ## 5.9.0
 
 - Automatic mode picks the fastest measured server: a manual pick is no longer
@@ -12,8 +60,9 @@ Russian, English and Turkish are also at <https://docs.colitu.com/changelog/ios>
   only in censoring countries.
 - Invite a friend: invite screen with link, share and results; optional
   invite code at sign-up (signups labelled app:ios).
-- Anonymous usage statistics (on by default, can be turned off): aggregate
-  counters and connection events, no account, device, IP or visited site.
+- Usage statistics (on by default, can be turned off): aggregate counters
+  and connection events, no IP address or visited site (see 5.9.1 for what
+  exactly is sent).
 - In-app surveys (at most one in 30 days, can be turned off).
 
 ## 5.8.1

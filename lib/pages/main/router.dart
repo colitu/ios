@@ -4,6 +4,7 @@ import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/l10n/localizations/app_localizations.dart';
+import 'package:colitu_vpn/pages/colitu/privacy_cover.dart';
 import 'package:colitu_vpn/pages/main/url.dart';
 import 'package:colitu_vpn/service/event_bus/service.dart';
 import 'package:colitu_vpn/service/event_bus/state.dart';
@@ -40,7 +41,9 @@ class GoRouteApp extends StatelessWidget {
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: const [Locale('en'), Locale('ru'), Locale('tr')],
       localeResolutionCallback: (_, _) => Locale(ColituLoc.I.language),
-      builder: (_, child) => child ?? const SizedBox.shrink(),
+      // The app switcher snapshot shows the brand screen, not the page.
+      builder: (_, child) =>
+          ColituPrivacyCover(child: child ?? const SizedBox.shrink()),
     );
   }
 }

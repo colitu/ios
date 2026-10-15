@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:colitu_vpn/colitu/api/body_limit.dart';
 import 'package:colitu_vpn/colitu/api/cert_pins.dart';
 import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/core/tools/logger.dart';
@@ -316,6 +317,8 @@ bool shouldFailOver(DioException error, String method) {
     case DioExceptionType.badResponse:
     case DioExceptionType.badCertificate:
     case DioExceptionType.cancel:
+    // dio 5.10+: the answer arrived but decoding it timed out.
+    case DioExceptionType.transformTimeout:
       return false;
   }
 }
@@ -456,7 +459,10 @@ class EndpointManager {
       validateStatus: (status) => status != null,
     ),
   )
-    ..httpClientAdapter = CertPins.adapter()
+    ..httpClientAdapter = BodyLimitAdapter(
+      CertPins.adapter(),
+      defaultLimit: BodyLimitAdapter.endpointListLimit,
+    )
     ..interceptors.add(CertPinLogInterceptor());
 }
 

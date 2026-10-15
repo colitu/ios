@@ -10,10 +10,25 @@ permissions:
   contents: read
 
 jobs:
+  # The core's build steps that need no Mac (fetch, patches, pins, a
+  # darwin/arm64 build of every libXray package, libXray's go.mod revert and
+  # govulncheck): a broken patch shows up here in minutes.
+  core-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Core build check
+        run: COLITU_LIBXRAY_CHECK=1 bash scripts/build-libxray.sh
   ios:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The newest Xcode on the runner, like Codemagic's "xcode: latest" (the
@@ -24,9 +39,9 @@ jobs:
           sudo xcode-select -s "$XCODE"
           xcodebuild -version
       # build-libxray.sh compiles the core from source; the runner has no Go.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
           cache: false
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
@@ -36,6 +51,7 @@ jobs:
         run: |
           flutter pub get
           chmod +x scripts/build-libxray.sh scripts/generate-ffi-bindings.sh
+          # Also runs govulncheck on the pinned core (reported, not fatal).
           scripts/build-libxray.sh
           scripts/generate-ffi-bindings.sh
       # Infos are deprecation notes of newer Flutter releases; warnings and

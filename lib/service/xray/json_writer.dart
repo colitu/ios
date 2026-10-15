@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:colitu_vpn/core/model/xray_json.dart';
-import 'package:colitu_vpn/core/network/constants.dart';
 import 'package:colitu_vpn/core/pigeon/host_api.dart';
 import 'package:colitu_vpn/core/tools/file.dart';
 import 'package:colitu_vpn/core/tools/json.dart';
@@ -23,7 +22,9 @@ extension XrayJsonWriter on XrayJson {
     return res;
   }
 
-  Future<int> ping(PingState pingState, String port) async {
+  /// [proxy]: the probe inbound's address with its credentials
+  /// (InboundPingState.proxyUrl).
+  Future<int> ping(PingState pingState, String proxy) async {
     final configPath = await FileTool.makeCacheFile(ConfigFileType.json);
     await _writeToPath(configPath);
 
@@ -32,7 +33,7 @@ extension XrayJsonWriter on XrayJson {
       configPath,
       pingState.timeout.toInt(),
       pingState.realUrl,
-      "http://${NetConstants.proxyHost}:$port",
+      proxy,
     );
     await FileTool.deleteFileIfExists(configPath);
 

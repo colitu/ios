@@ -159,15 +159,21 @@ void main() {
     ) async {
       await pump(tester);
       expect(find.text('2 locations'), findsOneWidget);
+      // Frankfurt may also head the recommended card, so the city rows are
+      // found by their keys.
+      Finder city(VPNServer s) =>
+          find.byKey(ValueKey('city.${s.selectionKey}'));
       expect(find.text('Berlin'), findsNothing);
-      expect(find.text('Frankfurt'), findsNothing);
+      expect(city(de1), findsNothing);
 
       await tester.tap(find.text('2 locations'));
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('Berlin'), findsOneWidget);
-      expect(find.text('Frankfurt'), findsOneWidget);
+      expect(city(de1), findsOneWidget);
 
       await tester.tap(find.text('2 locations'));
+      // The rows close with a 250 ms animation, then leave the tree.
+      await tester.pump(const Duration(milliseconds: 400));
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('Berlin'), findsNothing);
     });

@@ -4,9 +4,11 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
+import 'package:colitu_vpn/colitu/l10n/server_names.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/config/adaptive_connect3.dart';
 import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
+import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ac_events.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
@@ -105,6 +107,10 @@ class ColituConnectionController extends ChangeNotifier
   static const _spareWait = Duration(seconds: 2);
 
   /// Waits before each reconnect after an unexpected tunnel drop.
+  /// Recovery rounds that met a device without network and were not
+  /// counted as attempts (each one waits up to 10 minutes for it).
+  static const _maxOfflineRetries = 6;
+
   static const _recoveryDelays = [
     Duration(seconds: 2),
     Duration(seconds: 5),
@@ -132,6 +138,24 @@ class ColituConnectionController extends ChangeNotifier
   /// Mid-session stall check of a live Hysteria2 tunnel (foreground only).
   final _stallWatch = ColituStallWatch();
   _TrafficSample? _lastTraffic;
+
+  /// From the tunnel's heartbeat: a core restart of the extension's own is
+  /// running, and when the core last started (ms since epoch, 0: unknown).
+  var _tunnelRestarting = false;
+  var _coreStartedAtMs = 0;
+
+  /// The seconds after a core start, and a restart the extension makes
+  /// itself, look like a stall from here (the probe meets no core or a
+  /// fresh handshake). The extension validates its own restart; judging it
+  /// too made the app tear down a tunnel that was coming back by itself.
+  static const _coreSettleTime = Duration(seconds: 20);
+
+  bool get _tunnelSettling {
+    if (_tunnelRestarting) return true;
+    if (_coreStartedAtMs <= 0) return false;
+    final started = DateTime.fromMillisecondsSinceEpoch(_coreStartedAtMs);
+    return DateTime.now().difference(started) < _coreSettleTime;
+  }
 
   /// Adaptive Connect memory per network (last-good server and transport,
   /// stalled transports, penalized servers), read from storage on first
@@ -403,6 +427,7 @@ class ColituConnectionController extends ChangeNotifier
       ..isNode = _isNode;
     alwaysOn = await PreferencesKey().readColituKillSwitchEnabled();
     autoConnect = await PreferencesKey().readColituAutoConnect();
+    await ColituAdBlock.load();
     adBlock = await PreferencesKey().readColituAdBlock();
     privacyMode = await PreferencesKey().readColituPrivacyMode();
     ColituRuBypass.privacyMode = privacyMode;
@@ -546,6 +571,12 @@ class ColituConnectionController extends ChangeNotifier
     }
   }
 
+  /// A new app language: one status call carries it (Accept-Language), so
+  /// the panel writes notifications and e-mails in it from now on.
+  Future<void> languageChanged() async {
+    await _readStatus();
+  }
+
   Future<VPNStatus?> _readStatus() async {
     try {
       final fresh = await _vpnService.status().timeout(
@@ -554,6 +585,7 @@ class ColituConnectionController extends ChangeNotifier
       // The account answers again (a device was removed, the plan grew):
       // a pause that came from this check ends with it.
       if (paused != null && _pauseFromStatus) paused = null;
+      if (await ColituAdBlock.remember(fresh.adBlockDoh)) _notify();
       return fresh;
     } on APIException catch (e) {
       if (e.code == APIErrorCode.deviceOverLimit) {
@@ -997,6 +1029,21 @@ class ColituConnectionController extends ChangeNotifier
         return;
       }
       await _resetTunnelState();
+      if (reconnect &&
+          !recovery &&
+          e is APIException &&
+          e.code == APIErrorCode.networkUnavailable &&
+          _canRecover) {
+        // An automatic reconnect (stall, server problem) met a device with
+        // no network: the VPN must not stay off. The drop recovery waits for
+        // the network and connects again.
+        status = ColituVpnStatus.disconnected;
+        phase = ColituConnectPhase.idle;
+        notice = ColituLoc.I['home.reconnecting'];
+        _notify();
+        unawaited(_recoverFromDrop(DateTime.now(), ownStop: true));
+        return;
+      }
       if (e is APIException && e.backendCode == 'MULTIHOP_ROUTE_NOT_FOUND') {
         // The route was removed or renamed: learn the current list.
         _fail(ColituLoc.I['multihop.gone']);
@@ -1405,7 +1452,9 @@ class ColituConnectionController extends ChangeNotifier
       _telemetry.tryingConnect(
         nodeId: _connectedNodeId,
         protocol: lastProtocol,
-        fallbacks: _serverFallbacks,
+        // Earlier servers and earlier transports on this one: the first try is
+        // the first round on the first server (a winning spare included).
+        fallbacks: _serverFallbacks + attempt,
       );
       transport = lastProtocol;
       transportLatencyMs = _adapter.lastChosenLatencyMs;
@@ -1508,7 +1557,6 @@ class ColituConnectionController extends ChangeNotifier
           ok = await _verifyTraffic(serial);
           if (serial != _connectSerial) return superseded;
         }
-        _telemetry.functionalCheck(ok: ok);
       }
       if (ok) {
         connectedServer = connectedTo;
@@ -1596,10 +1644,15 @@ class ColituConnectionController extends ChangeNotifier
         loading ||
         server == null ||
         server.isMultihop ||
-        current == null ||
-        !_stallWatch.due(now)) {
+        current == null) {
       return;
     }
+    if (_tunnelSettling) {
+      // Count afresh once the extension's restart has settled.
+      _stallWatch.reset(now);
+      return;
+    }
+    if (!_stallWatch.due(now)) return;
     final serial = _connectSerial;
     final plan = _livePlan;
     final primaryCheck = ColituVerifyProxy.current;
@@ -1615,12 +1668,19 @@ class ColituConnectionController extends ChangeNotifier
       bool normalOk;
       if (spareAttached) {
         final results = await Future.wait([
-          NetClient().trafficCheck(proxy: primaryCheck.directive),
+          NetClient().trafficCheck(
+            proxy: primaryCheck.directive,
+            serverHost: server.host,
+          ),
+          // No server probe without the check proxy: the server's address
+          // is routed outside the tunnel, so a dead tunnel would pass it.
           flowing ? Future.value(true) : NetClient().trafficCheck(),
         ]);
         primaryOk = results[0];
         normalOk = results[1];
       } else {
+        // Public hosts only: the server's own probe would reach it outside
+        // the tunnel (its address is excluded from the tunnel route).
         normalOk = flowing || await NetClient().trafficCheck();
         primaryOk = normalOk;
       }
@@ -1629,8 +1689,10 @@ class ColituConnectionController extends ChangeNotifier
       if (_disposed ||
           serial != _connectSerial ||
           !connected ||
-          transport != current) {
-        // Another session (or none) by now: start its count afresh.
+          transport != current ||
+          _tunnelSettling) {
+        // Another session (or none) by now, or the extension restarted its
+        // core meanwhile: start the count afresh.
         _stallWatch.reset(DateTime.now());
         return;
       }
@@ -2174,7 +2236,13 @@ class ColituConnectionController extends ChangeNotifier
   /// the plan, a pause or the session): after 2 s, 5 s and 15 s, then the
   /// last error stays. While the device has no network no attempt is spent:
   /// the next one waits for the network to come back.
-  Future<void> _recoverFromDrop(DateTime droppedAt) async {
+  ///
+  /// [ownStop]: the app took the tunnel down itself in an automatic
+  /// reconnect, so the stop recorded for it is not a reason to give up.
+  Future<void> _recoverFromDrop(
+    DateTime droppedAt, {
+    bool ownStop = false,
+  }) async {
     final epoch = ++_recoveryEpoch;
     bool cancelled() =>
         _disposed ||
@@ -2203,9 +2271,16 @@ class ColituConnectionController extends ChangeNotifier
       );
     }
 
+    var offlineRetries = 0;
     for (var attempt = 0; attempt < _recoveryDelays.length; attempt++) {
       await Future.delayed(_recoveryDelays[attempt]);
-      if (attempt == 0 && !cancelled() && !await _stoppedOnPurpose(droppedAt)) {
+      // Once: an offline round repeats attempt 0 without counting the drop
+      // again.
+      if (attempt == 0 &&
+          !counted &&
+          !ownStop &&
+          !cancelled() &&
+          !await _stoppedOnPurpose(droppedAt)) {
         counted = true;
         final up = _telemetry.unexpectedDrop();
         _telemetry.beginRecovery(
@@ -2220,7 +2295,7 @@ class ColituConnectionController extends ChangeNotifier
         endRecovery(ok: connected || _tunnelRunning);
         return;
       }
-      if (await _stoppedOnPurpose(droppedAt)) {
+      if (!ownStop && await _stoppedOnPurpose(droppedAt)) {
         endRecovery(ok: false);
         return giveUp(null);
       }
@@ -2254,6 +2329,19 @@ class ColituConnectionController extends ChangeNotifier
         endRecovery(ok: false);
         return;
       }
+      final failure = _lastConnectFailure;
+      if (failure is APIException &&
+          failure.code == APIErrorCode.networkUnavailable &&
+          offlineRetries < _maxOfflineRetries) {
+        // The device had no network: no attempt is spent, the next round
+        // waits for it again.
+        offlineRetries++;
+        attempt--;
+        error = null;
+        notice = ColituLoc.I['home.reconnecting'];
+        _notify();
+        continue;
+      }
       if (attempt + 1 < _recoveryDelays.length) {
         // The error of this attempt shows once the last one failed too.
         error = null;
@@ -2280,6 +2368,8 @@ class ColituConnectionController extends ChangeNotifier
             APIErrorCode.deviceDisconnected,
             APIErrorCode.emailNotVerified,
             APIErrorCode.vpnPermissionDenied,
+            APIErrorCode.accountUnderReview,
+            APIErrorCode.accountBlocked,
           }.contains(e.code));
 
   /// True when the newest stop recorded around [droppedAt] was asked for.
@@ -2346,6 +2436,8 @@ class ColituConnectionController extends ChangeNotifier
       if (!await file.exists()) return;
       final json = jsonDecode(await file.readAsString());
       if (json is! Map<String, dynamic>) return;
+      _tunnelRestarting = json['restarting'] == true;
+      _coreStartedAtMs = (json['coreStartedAt'] as num?)?.toInt() ?? 0;
       unawaited(_updateServerProblem(json['serverProblem'] == true));
       final sample = _TrafficSample(
         up: (json['up'] as num?)?.toInt() ?? 0,
@@ -3020,16 +3112,19 @@ class ColituConnectionController extends ChangeNotifier
 
   String _serverTitle(VPNServer server) {
     final code = server.countryCode;
+    // Panel names (Turkish) are shown in the app language.
     final country = code.length == 2
         ? ColituLoc.I.countryName(code)
-        : server.displayCountry;
+        : ColituServerNames.displayName(server.displayCountry);
     // A route is named by its two ends ("Helsinki → Frankfurt").
-    if (server.isMultihop) return server.name;
-    final city = server.city?.trim();
-    if (city != null && city.isNotEmpty && city.toLowerCase() != country.toLowerCase()) {
+    if (server.isMultihop) return ColituServerNames.route(server.name);
+    final city = ColituServerNames.city(server.city);
+    if (city.isNotEmpty && city.toLowerCase() != country.toLowerCase()) {
       return '$country · $city';
     }
-    return country.isEmpty ? server.displayTitle : country;
+    return country.isEmpty
+        ? ColituServerNames.displayName(server.displayTitle, countryCode: code)
+        : country;
   }
 
   /// Localized title for a server row.
@@ -3042,9 +3137,24 @@ class ColituConnectionController extends ChangeNotifier
   var _pingsLoaded = false;
   Future<void>? _pingRun;
 
-  /// Ping of [server]: measured here, else whatever the panel sent.
+  /// The latency probe; tests swap in a fake.
+  @visibleForTesting
+  Future<int?> Function(String host, int port)? latencyProbe;
+
+  /// Ping of [server]: the last direct reading on this network (at most
+  /// [ServerLatency.shownFor] old), else whatever the panel sent. While the
+  /// VPN is up nothing new is measured, so this is the reading from before.
   int? pingOf(VPNServer server) =>
-      _pings[server.selectionKey]?.ms ?? server.ping;
+      ServerLatency.shownPing(
+        _pings[server.selectionKey],
+        network: networkKey,
+        now: DateTime.now(),
+      ) ??
+      server.ping;
+
+  /// No ping is measured now (the tunnel is up, starting or stopping): the
+  /// list shows the last direct readings.
+  bool get pingsPaused => status != ColituVpnStatus.disconnected;
 
   /// Re-measures the pings unless a tunnel is up or starting.
   Future<void> measurePings() async {
@@ -3060,12 +3170,26 @@ class ColituConnectionController extends ChangeNotifier
         }
       } catch (_) {}
     }
-    if (status != ColituVpnStatus.disconnected || _pingRun != null) return;
+    if (pingsPaused) {
+      // Nothing is dialled. Only the link kind is read (local interfaces)
+      // so a launch with the tunnel already up still shows this network's
+      // last readings.
+      final before = networkKey;
+      try {
+        await _refreshNetwork();
+      } catch (_) {}
+      if (networkKey != before) _notify();
+      return;
+    }
+    if (_pingRun != null) return;
     final list = [...servers, ...multihopServers];
     final run = () async {
       await _refreshNetwork();
       final network = networkKey;
-      final measured = await ServerLatency.measureAll(list);
+      final measured = await ServerLatency.measureAll(
+        list,
+        probe: latencyProbe,
+      );
       if (measured.isEmpty || status != ColituVpnStatus.disconnected) return;
       final at = DateTime.now();
       _pings = {

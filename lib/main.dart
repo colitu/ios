@@ -11,6 +11,10 @@ import 'package:colitu_vpn/pages/main/router.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main() async {
+  // Release builds write nothing to the system log: debugPrint goes to the
+  // device console (readable over USB), and error texts can carry URLs,
+  // server names or account details.
+  if (kReleaseMode) debugPrint = (String? message, {int? wrapWidth}) {};
   final startup = runZonedGuarded<Future<void>>(
     () async {
       WidgetsFlutterBinding.ensureInitialized();

@@ -6,7 +6,7 @@ import 'package:colitu_vpn/service/xray/outbound/state_writer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Port hopping for Hysteria2: the panel's transport may carry hop_ports and
-/// hop_interval, which become Xray 26's finalmask.quicParams.udpHop.
+/// hop_interval, which become Xray 26.9+'s "udphop" UDP mask in finalmask.udp.
 void main() {
   Map<String, dynamic> profile(Map<String, dynamic> transport) => {
     'format': 'xray-mobile-v1',
@@ -30,24 +30,31 @@ void main() {
     return state.xrayJson.toJson();
   }
 
-  test('hop_ports becomes finalmask.quicParams.udpHop', () {
+  Map<String, dynamic> hop(int interval) => {
+    'udp': [
+      {
+        'type': 'udphop',
+        'settings': {
+          'mode': 'intervalLocal,intervalRemote',
+          'interval': interval,
+          'remotePorts': '20000-40000',
+        },
+      },
+    ],
+  };
+
+  test('hop_ports becomes the udphop UDP mask', () {
     final candidate = VPNOutboundCandidate.fromProfile(
       profile({'hop_ports': '20000-40000', 'hop_interval': 30}),
     );
-    expect(candidate.outboundConfig['streamSettings']['finalmask'], {
-      'quicParams': {
-        'udpHop': {'ports': '20000-40000', 'interval': '30'},
-      },
-    });
+    expect(candidate.outboundConfig['streamSettings']['finalmask'], hop(30));
 
     // It survives the outbound state round trip into the written config.
     final json = written({'hop_ports': '20000-40000', 'hop_interval': 15});
     final stream = json['streamSettings'] as Map<String, dynamic>;
-    expect(stream['finalmask'], {
-      'quicParams': {
-        'udpHop': {'ports': '20000-40000', 'interval': '15'},
-      },
-    });
+    expect(stream['finalmask'], hop(15));
+    // The older shapes, which Xray 26.10 ignores, are not used.
+    expect(stream['finalmask'], isNot(contains('quicParams')));
     // The old shape, which Xray 26 ignores, is not used.
     expect(stream['hysteriaSettings'], isNot(contains('udphop')));
   });
@@ -76,10 +83,13 @@ void main() {
     final candidate = VPNOutboundCandidate.fromProfile(
       profile({'hop_ports': '20000-40000'}),
     );
-    expect(
-      candidate.outboundConfig['streamSettings']['finalmask']['quicParams']
-          ['udpHop']['interval'],
-      '30',
+    expect(candidate.outboundConfig['streamSettings']['finalmask'], hop(30));
+  });
+
+  test('an interval under 5 s (refused by the core) becomes 5 s', () {
+    final candidate = VPNOutboundCandidate.fromProfile(
+      profile({'hop_ports': '20000-40000', 'hop_interval': 2}),
     );
+    expect(candidate.outboundConfig['streamSettings']['finalmask'], hop(5));
   });
 }

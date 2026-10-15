@@ -62,7 +62,8 @@ ColituMetricsOutcome colituOutcomeFor(int? status) =>
 int? colituStatusOf(Object error) =>
     error is APIException ? error.statusCode : null;
 
-/// Anonymous usage statistics: aggregate counters, three histograms and the
+/// Usage statistics (kept by the server as daily totals, not linked to the
+/// account or device): aggregate counters, three histograms and the
 /// names of the features used, kept on the device since the last accepted
 /// report. Nothing identifies an account, a device, an IP address or a site.
 /// This class is the plain data (unit tested); [ColituMetrics] stores and
@@ -260,7 +261,7 @@ abstract final class ColituMetricsRules {
           now.difference(lastAttempt) >= every);
 }
 
-/// Local store and sender of the anonymous statistics (default on). With the
+/// Local store and sender of the usage statistics (default on). With the
 /// setting off nothing is collected or sent and the stored numbers are gone.
 /// Sent at most every [sendInterval]; never blocks the UI. All mutations run
 /// one after another on a private chain, so callers can fire and forget.
@@ -325,7 +326,7 @@ class ColituMetrics {
   /// Waits for everything queued so far (tests).
   Future<void> idle() => _run(() async {});
 
-  /// The "Anonymous usage statistics" switch (default on).
+  /// The "Usage statistics" switch (default on).
   Future<bool> isEnabled() async {
     var value = true;
     await _run(() async => value = _enabled);

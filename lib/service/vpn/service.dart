@@ -11,7 +11,10 @@ import 'package:colitu_vpn/core/tools/platform.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
+import 'package:colitu_vpn/colitu/services/core_config_finish.dart';
 import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
+import 'package:colitu_vpn/colitu/services/tunnel_inbounds.dart';
+import 'package:colitu_vpn/colitu/storage/backup_exclusion.dart';
 import 'package:colitu_vpn/colitu/services/warm_spare.dart';
 import 'package:colitu_vpn/core/constants/preferences.dart';
 import 'package:colitu_vpn/core/db/database/constants.dart';
@@ -37,7 +40,6 @@ import 'package:colitu_vpn/service/toast/service.dart';
 import 'package:colitu_vpn/service/tun_setting/state.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
 import 'package:colitu_vpn/service/xray/constants.dart';
-import 'package:colitu_vpn/service/xray/json_writer.dart';
 import 'package:colitu_vpn/service/xray/outbound/state.dart';
 import 'package:colitu_vpn/service/xray/outbound/state_reader.dart';
 import 'package:colitu_vpn/service/xray/raw/fix.dart';
@@ -351,6 +353,9 @@ final class VpnService {
 
     final runDir = VpnConstants.runDir;
     await FileTool.checkDir(runDir);
+    // The start request and core configuration (server credentials) are
+    // written here: keep the directory out of the backups.
+    if (AppPlatform.isIOS) await ColituBackupExclusion.exclude(runDir);
 
     final ports = await XrayPorts.getPorts();
     if (ports == null) {
@@ -431,13 +436,25 @@ final class VpnService {
     );
   }
 
+  static Future<void> _deleteQuietly(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // Still open somewhere; the next start tries again.
+    }
+  }
+
   /// Starts fresh logs for a new session. The stability and core error logs
   /// of earlier sessions move to a bounded history file first: a user who
   /// reconnects because the tunnel felt broken would otherwise erase exactly
   /// the record of what went wrong.
   Future<void> _clearXrayLog() async {
     await Future.wait([
-      File(XrayStateConstants.accessLogPath).writeAsString(""),
+      // The tunnel runs the core without an access log (it would list every
+      // site visited); an empty or older file left in the shared container
+      // is removed instead of recreated.
+      _deleteQuietly(XrayStateConstants.accessLogPath),
       appendToLogHistory(XrayStateConstants.errorLogPath, errorLogHistoryPath),
       appendToLogHistory(stabilityLogPath, stabilityLogHistoryPath),
     ]);
@@ -509,24 +526,28 @@ final class VpnService {
       ColituAdBlock.applyTo(settingState);
     }
     final xrayJson = settingState.xrayJson;
-    if (spare != null) {
-      final json =
-          jsonDecode(jsonEncode(xrayJson.toJson())) as Map<String, dynamic>;
-      if (ColituWarmSpare.applyTo(
-        json,
-        verify: checks!.primary,
-        verifySpare: checks.spare,
-      )) {
-        final configPath = XrayStateConstants.configFilePath;
-        await File(configPath).writeAsString(
-          JsonTool.encodeJsonToSortedString(json, JsonTool.encoderForFile),
-        );
-        ColituVerifyProxy.current = checks.primary;
-        ColituVerifyProxy.currentSpare = checks.spare;
-        return configPath;
-      }
+    ColituTunnelInbounds.stripPing(xrayJson);
+    final json =
+        jsonDecode(jsonEncode(xrayJson.toJson())) as Map<String, dynamic>;
+    // Split tunneling: listed sites (domains, and "only" mode) are routed
+    // by the core; listed IP ranges also leave at the routing table. Before
+    // the warm spare, so its balancer covers these rules too.
+    ColituSplitTunnel.applyTo(json, ColituSplitTunnel.current);
+    if (spare != null &&
+        ColituWarmSpare.applyTo(
+          json,
+          verify: checks!.primary,
+          verifySpare: checks.spare,
+        )) {
+      ColituVerifyProxy.current = checks.primary;
+      ColituVerifyProxy.currentSpare = checks.spare;
     }
-    final configPath = await xrayJson.writeConfig(runDir);
+    ColituTunnelInbounds.stripOpenProxies(json);
+    ColituCoreConfig.uniqueRuleTags(json);
+    final configPath = XrayStateConstants.configFilePath;
+    await File(configPath).writeAsString(
+      JsonTool.encodeJsonToSortedString(json, JsonTool.encoderForFile),
+    );
     return configPath;
   }
 
@@ -649,6 +670,11 @@ final class VpnService {
     final rawText = utf8.decode(bytes);
     final jsonMap = JsonTool.decoder.convert(rawText);
     await XrayRawFix.fixConfig(jsonMap, tunSettingState, port);
+    if (jsonMap is Map<String, dynamic>) {
+      ColituTunnelInbounds.stripPingMap(jsonMap);
+      ColituTunnelInbounds.stripOpenProxies(jsonMap);
+      ColituCoreConfig.uniqueRuleTags(jsonMap);
+    }
     final configText = JsonTool.encoderForFile.convert(jsonMap);
     final configPath = XrayStateConstants.configFilePath;
     final file = File(configPath);
@@ -667,9 +693,11 @@ final class VpnService {
       return;
     }
 
+    // No ping port: the tunnel has no ping inbound (tunnel_inbounds.dart),
+    // so the inherited connectivity test through it does not run either.
     final request = StartVpnRequest(
       tunSettingState.tunJson,
-      port.pingPort,
+      null,
       coreBase64Text,
     );
     await request.writeToStartFile();

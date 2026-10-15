@@ -1,7 +1,7 @@
 name: colitu_vpn
 description: "Colitu Secure VPN"
 publish_to: "none"
-version: 5.9.0+56
+version: 5.9.1+57
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -21,7 +21,7 @@ dependencies:
   quick_actions: ^1.1.0
   go_router: ^17.2.2
   image_picker: ^1.2.1
-  process: ^5.0.5
+  process: ^5.0.6
 
   #---------- dart.dev plugin
   # core
@@ -64,18 +64,18 @@ dependencies:
   flutter_bloc: ^9.1.1
   flex_seed_scheme: ^4.0.1
   # markdown
-  flutter_markdown_plus: ^1.0.7
+  flutter_markdown_plus: ^1.0.12
   duration: ^4.0.3
 
   flutter_local_notifications: ^21.0.0
 
-  in_app_review: ^2.0.11
+  in_app_review: ^2.0.12
 
   isolate_manager: ^6.3.2
 
   # desktop
   tray_manager: ^0.5.2
-  window_manager: ^0.5.1
+  window_manager: ^0.5.2
   win32: ^5.15.0
   pointycastle: ^4.0.0
 
@@ -84,7 +84,7 @@ dev_dependencies:
     sdk: flutter
   build_runner: ^2.14.1
   json_serializable: ^6.13.1
-  drift_dev: ^2.32.1
+  drift_dev: ^2.34.0
   pigeon: ^26.3.4
   flutter_lints: ^6.0.0
   flutter_gen_runner: ^5.14.0

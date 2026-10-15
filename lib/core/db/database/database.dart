@@ -8,6 +8,7 @@ import 'package:colitu_vpn/core/db/table/geo_data.dart';
 import 'package:colitu_vpn/core/db/table/subscription.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:colitu_vpn/core/tools/platform.dart';
+import 'package:colitu_vpn/core/db/database/db_location.dart';
 
 part 'database.g.dart';
 
@@ -31,6 +32,15 @@ class AppDatabase extends _$AppDatabase {
         name: 'db',
         native: const DriftNativeOptions(
           databaseDirectory: getApplicationSupportDirectory,
+        ),
+      );
+    } else if (AppPlatform.isIOS) {
+      // Outside the backups (db_location.dart); moved from Documents once.
+      return driftDatabase(
+        name: 'db',
+        native: const DriftNativeOptions(
+          databasePath: AppDatabaseLocation.resolve,
+          setup: AppDatabaseLocation.setup,
         ),
       );
     } else {

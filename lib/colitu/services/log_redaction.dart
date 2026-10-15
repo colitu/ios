@@ -25,7 +25,7 @@ class LogRedaction {
     caseSensitive: false,
   );
   static final _jsonSecret = RegExp(
-    r'("(?:password|uuid|id|auth|auth_str|psk|token|access_token|refresh_token|private_key|privateKey|publicKey|shortId|short_id)"\s*:\s*)"[^"]*"',
+    r'("(?:password|pass|secret|seed|uuid|id|auth|auth_str|psk|token|access_token|refresh_token|private_key|privateKey|publicKey|shortId|short_id)"\s*:\s*)"[^"]*"',
     caseSensitive: false,
   );
 

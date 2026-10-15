@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:collection/collection.dart';
 import 'package:colitu_vpn/core/model/xray_json.dart';
 import 'package:colitu_vpn/core/network/constants.dart';
@@ -155,11 +157,36 @@ class InboundSniffingState {
   }
 }
 
+/// The local HTTP proxy a latency probe measures through (a short-lived core
+/// in the app). Every app on the phone can reach 127.0.0.1, so it takes a
+/// random user name and password, new for every probe, and the probe's
+/// client sends them ([proxyUrl]); the port is a free one picked per probe.
 class InboundPingState {
   final listen = NetConstants.proxyHost;
   var port = VpnConstants.randomPort;
   final protocol = XrayInboundProtocol.http;
   final tag = RoutingInboundTag.pingIn;
+  final user = randomCredential();
+  final pass = randomCredential();
+
+  /// 32 hex characters from a secure random source: safe in the core's
+  /// JSON and in a URL's user info as they are.
+  static String randomCredential() {
+    final random = Random.secure();
+    return [
+      for (var i = 0; i < 16; i++)
+        random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ].join();
+  }
+
+  Map<String, dynamic> get settings => {
+    'accounts': [
+      {'user': user, 'pass': pass},
+    ],
+  };
+
+  /// The proxy address with the credentials, for the probe's HTTP client.
+  String get proxyUrl => 'http://$user:$pass@$listen:$port';
 
   XrayInbound get xrayJson {
     final inbound = XrayInboundStandard.standard;
@@ -167,8 +194,24 @@ class InboundPingState {
     inbound.port = port;
     inbound.protocol = protocol.name;
     inbound.tag = tag.name;
+    inbound.settings = settings;
 
     return inbound;
+  }
+
+  /// Puts these credentials on the ping inbound of a raw configuration.
+  void protect(Map<String, dynamic> config) {
+    final inbounds = config['inbounds'];
+    if (inbounds is! List) return;
+    for (final inbound in inbounds) {
+      if (inbound is Map && inbound['tag'] == tag.name) {
+        final current = inbound['settings'];
+        inbound['settings'] = {
+          if (current is Map) ...current,
+          ...settings,
+        };
+      }
+    }
   }
 }
 

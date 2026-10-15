@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/vpn_service.dart';
 
@@ -60,14 +61,42 @@ class ClientNotice {
     );
   }
 
-  /// The button is shown only for a web link.
-  Uri? get link {
-    final raw = url;
-    if (raw == null) return null;
-    final uri = Uri.tryParse(raw);
-    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) return null;
-    return uri;
+  /// The button is shown only for an https link to Colitu's own sites
+  /// (colitu.com, its subdomains or a build-time mirror origin): a notice
+  /// from a compromised panel cannot open a look-alike page under the app's
+  /// name.
+  Uri? get link => safeNoticeLink(url);
+}
+
+/// [raw] as a Uri when it is an https link to an allowed host, else null.
+/// [mirrorOrigins] defaults to the build's `COLITU_MIRRORS`.
+Uri? safeNoticeLink(String? raw, {List<String>? mirrorOrigins}) {
+  if (raw == null) return null;
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null ||
+      uri.scheme != 'https' ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty) {
+    return null;
   }
+  return isColituLinkHost(
+        uri.host,
+        mirrorOrigins: mirrorOrigins ?? AppEnvironment.mirrorOrigins,
+      )
+      ? uri
+      : null;
+}
+
+/// colitu.com, any subdomain of it, or the host of a mirror origin.
+bool isColituLinkHost(String host, {required List<String> mirrorOrigins}) {
+  final h = host.toLowerCase().replaceFirst(RegExp(r'\.$'), '');
+  if (h.isEmpty) return false;
+  if (h == 'colitu.com' || h.endsWith('.colitu.com')) return true;
+  for (final origin in mirrorOrigins) {
+    final mirror = Uri.tryParse(origin)?.host.toLowerCase() ?? '';
+    if (mirror.isNotEmpty && h == mirror) return true;
+  }
+  return false;
 }
 
 /// `{"notices":[…]}` → notices; anything else is "none".

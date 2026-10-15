@@ -42,7 +42,8 @@ class PingConcurrency {
 class PingState {
   var timeout = PingTimeout.defaultValue;
   var concurrency = PingConcurrency.defaultValue;
-  var url = PingUrl.cloudflare;
+  // Not Cloudflare: it is throttled in Russia.
+  var url = PingUrl.google;
   var customUrl = "";
 
   String get realUrl {

@@ -44,7 +44,9 @@ void main() {
   test('pings never dial loopback, private or link-local addresses', () {
     bool public(String address) => ServerLatency.isPublic(InternetAddress(address));
 
-    expect(public('203.0.113.7'), isTrue);
+    expect(public('1.1.1.1'), isTrue);
+    // Documentation ranges (RFC 5737) are never a node.
+    expect(public('203.0.113.7'), isFalse);
     expect(public('8.8.8.8'), isTrue);
     expect(public('2a00:1450:4001::1'), isTrue);
     for (final address in [

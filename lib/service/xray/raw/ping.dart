@@ -1,5 +1,4 @@
 import 'package:colitu_vpn/core/db/database/constants.dart';
-import 'package:colitu_vpn/core/network/constants.dart';
 import 'package:colitu_vpn/core/pigeon/host_api.dart';
 import 'package:colitu_vpn/core/tools/file.dart';
 import 'package:colitu_vpn/core/tools/json.dart';
@@ -20,6 +19,8 @@ class XrayRawPing {
     XrayRawFix.fixMetrics(jsonMap);
     XrayRawFix.fixInboundsTun(jsonMap);
     XrayRawFix.fixInboundsPort(jsonMap, ports);
+    final auth = InboundPingState()..port = ports.pingPort;
+    auth.protect(jsonMap);
     XrayRawFix.fixLog(jsonMap);
     final text = JsonTool.encoderForDb.convert(jsonMap);
 
@@ -30,7 +31,7 @@ class XrayRawPing {
       configPath,
       pingState.timeout.toInt(),
       pingState.realUrl,
-      "http://${NetConstants.proxyHost}:${ports.pingPort}",
+      auth.proxyUrl,
     );
     await FileTool.deleteFileIfExists(configPath);
 

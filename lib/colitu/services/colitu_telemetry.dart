@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:colitu_vpn/colitu/services/colitu_ac_events.dart';
 import 'package:colitu_vpn/colitu/services/colitu_metrics.dart';
 
-/// The connection flow's side of the anonymous statistics and the Adaptive
+/// The connection flow's side of the usage statistics and the Adaptive
 /// Connect events: it keeps the open connect attempt and the open recovery
 /// and turns their results into counters, histograms and events (see
 /// [ColituMetrics], [ColituAcEventStore]). The controller only calls the
@@ -29,7 +29,7 @@ class ColituTelemetry {
   final ColituAcEventStore events;
   final DateTime Function() _clock;
 
-  /// The "Anonymous usage statistics" switch. Off deletes every stored
+  /// The "Usage statistics" switch. Off deletes every stored
   /// counter and queued event and stops collection.
   Future<void> setStatisticsEnabled(bool on) async {
     await metrics.setEnabled(on);
@@ -114,7 +114,7 @@ class ColituTelemetry {
   bool isCurrentAttempt(int id) => _attemptAt != null && id == _attemptSeq;
 
   /// The attempt is on [nodeId] with [protocol]; [fallbacks] is how many
-  /// servers were tried before this one (0: the first choice).
+  /// servers and transports were tried before this one (0: the first choice).
   void tryingConnect({String? nodeId, String? protocol, int? fallbacks}) {
     if (_attemptAt == null) return;
     if (nodeId != null) _node = nodeId;
@@ -140,6 +140,10 @@ class ColituTelemetry {
     _first = false;
     final node = nodeId ?? _node;
     final proto = protocol ?? _protocol;
+    // Internet verified through the tunnel: once per connect, not once per
+    // transport tried (blocked transports dragged it to ~60 %). An offline
+    // phone is not a failed check.
+    if (ok || reason != 'networkUnavailable') functionalCheck(ok: ok);
     if (ok) {
       metrics.count('connect_successes');
       metrics.count('sessions');
@@ -178,8 +182,8 @@ class ColituTelemetry {
     _attemptSeq++;
   }
 
-  /// One start-and-verify round of a transport finished ([ok]: traffic
-  /// flowed).
+  /// A connect ended with internet verified through the tunnel ([ok]) or
+  /// without it.
   void functionalCheck({required bool ok}) {
     metrics.count('functional_checks');
     if (ok) metrics.count('functional_ok');
@@ -190,6 +194,10 @@ class ColituTelemetry {
   /// A recovery starts. [failedAt] is when the failure began; [protocol] is
   /// the transport being left (null: not a switch, a plain reconnect);
   /// [detectMs]: how long the failure took to be noticed (null: unknown).
+  /// While a recovery is already open this does nothing: the open one keeps
+  /// its start. `recoveries` / `protocol_switches` are counted when the
+  /// recovery ends (ok or failed), so a recovery that is started twice or
+  /// never finished (the process died) cannot inflate them.
   void beginRecovery({
     required DateTime failedAt,
     String? protocol,
@@ -198,9 +206,7 @@ class ColituTelemetry {
     int? detectMs,
     bool spare = false,
   }) {
-    abandonRecovery();
-    metrics.count('recoveries');
-    if (protocol != null) metrics.count('protocol_switches');
+    if (recoveryOpen) return;
     if (detectMs != null) metrics.observe('detection_ms', detectMs);
     _recoveryAt = failedAt;
     _recoveryFrom = protocol;
@@ -218,6 +224,8 @@ class ColituTelemetry {
     final ms = now.difference(at).inMilliseconds;
     _recoveryAt = null;
     _recoveryFrom = null;
+    metrics.count('recoveries');
+    if (from != null) metrics.count('protocol_switches');
     var flap = false;
     final switched = ok && from != null && newProtocol != null && newProtocol != from;
     if (switched) {
@@ -257,11 +265,8 @@ class ColituTelemetry {
     }
   }
 
+  /// Drops the open recovery without an outcome; nothing was counted yet.
   void abandonRecovery() {
-    if (_recoveryAt != null) {
-      metrics.count('recoveries', -1);
-      if (_recoveryFrom != null) metrics.count('protocol_switches', -1);
-    }
     _recoveryAt = null;
     _recoveryFrom = null;
   }

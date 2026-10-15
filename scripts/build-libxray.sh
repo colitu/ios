@@ -34,19 +34,31 @@ on_error() {
 
 trap on_error ERR
 
+# COLITU_LIBXRAY_CHECK=1 runs every step that does not need a Mac on any
+# system (Windows, Linux): fetch, patches, pins, libXray's go.mod setup, a
+# darwin/arm64 build of every libXray package, libXray's go.mod revert and
+# govulncheck. No framework is produced. It checks this script without a Mac.
+CHECK_ONLY="${COLITU_LIBXRAY_CHECK:-}"
+PYTHON="${PYTHON:-python3}"
+# govulncheck on the pinned module graph after the build (reported, never
+# fatal); COLITU_GOVULNCHECK=0 skips it.
+GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION:-v1.8.0}"
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
-[[ "$(uname -s)" == "Darwin" ]] || die "LibXray iOS build must run on macOS. Do not run this script on Linux."
 need_cmd git
-need_cmd python3
-need_cmd xcodebuild
-need_cmd nm
-need_cmd make
-need_cmd lipo
-need_cmd libtool
-need_cmd xcrun
+need_cmd "$PYTHON"
+if [[ -z "$CHECK_ONLY" ]]; then
+  [[ "$(uname -s)" == "Darwin" ]] || die "LibXray iOS build must run on macOS (COLITU_LIBXRAY_CHECK=1 checks the steps before the Apple ones)."
+  need_cmd xcodebuild
+  need_cmd nm
+  need_cmd make
+  need_cmd lipo
+  need_cmd libtool
+  need_cmd xcrun
+fi
 
 echo "build-libxray: cleaning $WORK_DIR"
 rm -rf "$WORK_DIR"
@@ -63,7 +75,7 @@ echo "build-libxray: resolved revision $(git -C "$LIBXRAY_DIR" rev-parse HEAD)"
 # from the generated C bridge. The packet-tunnel extension needs the real core
 # state; treating RunXray's successful (and immediate) return as a process exit
 # causes false disconnect and recovery decisions.
-python3 - "$LIBXRAY_DIR/build/template/main.gotemplate" <<'PY'
+"$PYTHON" - "$LIBXRAY_DIR/build/template/main.gotemplate" <<'PY'
 from pathlib import Path
 import sys
 
@@ -117,6 +129,24 @@ func CGoGoSysBytes() C.longlong {
 // Fills out[0..8) with HeapAlloc, HeapInuse, HeapIdle, HeapReleased,
 // StackInuse, Sys, NumGC and the goroutine count so the tunnel can log
 // where the Go memory is and roughly how many connections are open.
+// Writes the goroutine profile grouped by identical stacks, largest group
+// first (pprof debug=1: counts and function names), into buf, at most n
+// bytes; returns the bytes written. The tunnel saves it when the memory
+// runs out so a diagnostics report shows which code holds the goroutines.
+//export CGoGoroutineProfile
+func CGoGoroutineProfile(buf *C.char, n C.int) C.int {
+	var out colitubytes.Buffer
+	if colitupprof.Lookup("goroutine").WriteTo(&out, 1) != nil || n <= 0 {
+		return 0
+	}
+	data := out.Bytes()
+	if len(data) > int(n) {
+		data = data[:int(n)]
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), int(n)), data)
+	return C.int(len(data))
+}
+
 //export CGoGoMemStats
 func CGoGoMemStats(out *C.longlong) {
 	var stats colituruntime.MemStats
@@ -133,12 +163,110 @@ if "func CGoSetMemoryLimit(" not in text:
         raise SystemExit("libXray C bridge template changed; cannot add memory exports")
     text = text.replace(
         'import "C"\n',
-        'import "C"\n\nimport (\n\tcolituruntime "runtime"\n\tcolitudebug "runtime/debug"\n\t"unsafe"\n\n\tcolituhysteria "github.com/xtls/xray-core/transport/internet/hysteria"\n)\n',
+        'import "C"\n\nimport (\n\tcolitubytes "bytes"\n\tcolituruntime "runtime"\n\tcolitudebug "runtime/debug"\n\tcolitupprof "runtime/pprof"\n\t"unsafe"\n\n\tcolituhysteria "github.com/xtls/xray-core/transport/internet/hysteria"\n)\n',
         1,
     )
     text = text.rstrip("\n") + "\n" + memory_exports
 path.write_text(text)
 PY
+
+# The pinned libXray revision was written against Xray-core 26.3; a few
+# Xray APIs it uses moved by 26.10 (geo lists, the MPH cache, Shadowsocks
+# UDP-over-TCP, Hysteria2 port hopping in share links). Adapt those spots;
+# the C bridge the app calls is unchanged. Checked on 2026-10-13: every
+# libXray package builds for darwin/arm64 against the patched core.
+"$PYTHON" - "$LIBXRAY_DIR" <<'COMPAT'
+# Makes the pinned libXray revision build against Xray-core 26.10.10.
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+
+def patch(rel, pairs):
+    path = root / rel
+    text = path.read_text()
+    for old, new in pairs:
+        if old not in text:
+            raise SystemExit(f"libXray {rel} changed; cannot apply the Xray 26.10 compatibility patch")
+        text = text.replace(old, new, 1)
+    path.write_text(text)
+
+# Geo lists moved from app/router to common/geodata.
+patch("geo/count.go", [
+    ('"github.com/xtls/xray-core/app/router"', 'router "github.com/xtls/xray-core/common/geodata"'),
+])
+# The MPH matcher cache is gone from Xray-core: the path is ignored.
+patch("xray/xray.go", [
+    ("\tif mphCachePath != \"\" {\n\t\tos.Setenv(platform.MphCachePath, mphCachePath)\n\t}\n", "\t_ = mphCachePath // Xray-core 26.10 has no MPH cache\n"),
+    ("\tif err := config.BuildMPHCache(&mphCachePath); err != nil {\n\t\tbase.Fatalf(\"failed to build MPH cache: %v\", err)\n\t\treturn err\n\t}\n\treturn nil\n",
+     "\t_ = config\n\treturn errors.New(\"MPH cache is not supported by Xray-core 26.10\")\n"),
+])
+# Shadowsocks UDP-over-TCP left the client config.
+patch("share/clash_meta.go", [
+    ("\tsettings.UoT = proxy.UdpOverTcp\n", ""),
+])
+# Port hopping moved from quicParams.udpHop to the "udphop" UDP mask. Share
+# links (not used by the Colitu app) keep bandwidth and Salamander only.
+patch("share/generate_share.go", [
+    ("""			if qp.UdpHop.PortList != nil {
+				var portList string
+				if json.Unmarshal(qp.UdpHop.PortList, &portList) == nil && len(portList) > 0 {
+					query = addQuery(query, "ports", portList)
+				}
+			}
+			if qp.UdpHop.Interval != nil {
+				query = addQuery(query, "hop-interval", strconv.FormatInt(int64(qp.UdpHop.Interval.From), 10))
+			}
+""", ""),
+])
+patch("share/hysteria_mask.go", [
+    ("""		if ports != "" {
+			udpHop := conf.UdpHop{}
+			portListJSON, err := json.Marshal(ports)
+			if err != nil {
+				return nil, err
+			}
+			udpHop.PortList = portListJSON
+			if hopInterval != nil {
+				i := *hopInterval
+				udpHop.Interval = &conf.Int32Range{Left: i, Right: i, From: i, To: i}
+			}
+			quicParams.UdpHop = udpHop
+		}
+""", "\t\t_ = hopInterval\n"),
+])
+
+def replace_all(rel, old, new):
+    path = root / rel
+    text = path.read_text()
+    if old not in text:
+        raise SystemExit(f"libXray {rel} changed; cannot apply the Xray 26.10 compatibility patch")
+    path.write_text(text.replace(old, new))
+
+replace_all("geo/count.go", ".CountryCode", ".Code")
+patch("xray/xray.go", [('import (\n\t"os"\n', 'import (\n\t"errors"\n\t"os"\n')])
+patch("share/generate_share.go", [('\t"strconv"\n', "")])
+patch("share/hysteria_mask.go", [('\t"encoding/json"\n', "")])
+COMPAT
+
+# Known Go vulnerabilities reachable from the core as built (pinned graph:
+# patched Xray, x/net, Go standard library), for darwin/arm64. Reported, not
+# fatal: an upstream finding without a fixed version must not stop a build.
+run_govulncheck() {
+  if [[ "${COLITU_GOVULNCHECK:-1}" == "0" ]]; then
+    return 0
+  fi
+  echo "build-libxray: govulncheck $GOVULNCHECK_VERSION on $(go list -m github.com/xtls/xray-core 2>/dev/null)"
+  # Built for this machine, run against the darwin/arm64 build context.
+  local bin="$WORK_DIR/bin"
+  if ! GOBIN="$bin" go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"; then
+    echo "build-libxray: WARNING: govulncheck could not be installed"
+    return 0
+  fi
+  if ! GOOS=darwin GOARCH=arm64 "$bin/govulncheck" ./...; then
+    echo "build-libxray: WARNING: govulncheck reported findings or could not run (see above)"
+  fi
+}
 
 pushd "$LIBXRAY_DIR" >/dev/null
 
@@ -151,46 +279,53 @@ pushd "$LIBXRAY_DIR" >/dev/null
 # 30 s. Build against a copy of the pinned xray-core with ResetClients(),
 # which the packet tunnel calls on every core stop and after a sleep.
 need_cmd go
+# The Go toolchain and the core version are pinned, so every build ships the
+# same, known core (Go's standard library carries the TLS, HTTP and DNS code
+# the core relies on). Xray-core v26.10.10 (2026-10-10, the version the
+# Android and Windows apps ship) is tagged without a Go module version, so
+# it is pinned by its commit as a pseudo-version (= tag v26.10.10, commit
+# 701af60772cd). Override both only on purpose.
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.2}"
 XRAY_MODULE="github.com/xtls/xray-core"
-go mod download "$XRAY_MODULE"
-XRAY_SRC="$(go list -m -f '{{.Dir}}' "$XRAY_MODULE")"
-[[ -n "$XRAY_SRC" && -d "$XRAY_SRC" ]] || die "could not locate $XRAY_MODULE in the module cache"
+XRAY_VERSION="${XRAY_VERSION:-v1.260327.1-0.20261010092107-701af60772cd}"
+# golang.org/x/net v0.60.0 fixes the HTTP/2 issues of 2026-10-08
+# (GO-2026-6603/6610/6611/6612/6617); Xray 26.10.10 itself requires 0.59.0.
+XNET_VERSION="${XNET_VERSION:-v0.60.0}"
+echo "build-libxray: go toolchain $(go env GOVERSION), $XRAY_MODULE $XRAY_VERSION"
+XRAY_SRC="$(go mod download -json "$XRAY_MODULE@$XRAY_VERSION" | "$PYTHON" -c 'import json, sys; print(json.load(sys.stdin).get("Dir", ""))')"
+[[ -n "$XRAY_SRC" && -d "$XRAY_SRC" ]] || die "could not download $XRAY_MODULE@$XRAY_VERSION"
 XRAY_PATCHED="$WORK_DIR/xray-core"
 rm -rf "$XRAY_PATCHED"
 cp -R "$XRAY_SRC" "$XRAY_PATCHED"
 chmod -R u+w "$XRAY_PATCHED"
-python3 - "$XRAY_PATCHED/transport/internet/hysteria/dialer.go" <<'HYSTERIA'
+"$PYTHON" - "$XRAY_PATCHED/transport/internet/hysteria/dialer.go" <<'HYSTERIA'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
-anchor = "var manger *clientManager\n"
-if anchor not in text or "func (c *client) close()" not in text or "closeErrCodeOK" not in text:
+# Xray 26.10 keys the clients by destination and stream settings and has a
+# "forced" close; ResetClients uses the dialer's own clean(force).
+anchor = "var (\n\tmanager     *clientManager\n\tinitmanager sync.Once\n)\n"
+if anchor not in text or "func (c *client) clean(force bool)" not in text or "func (m *clientManager) clean()" not in text:
     raise SystemExit("xray-core hysteria dialer changed; cannot add ResetClients")
 reset = anchor + """
 // ResetClients drops every cached QUIC client (Colitu patch). New dials
 // start a fresh connection at once; the old ones are closed in the
 // background, since one of them may be in the middle of a handshake.
 func ResetClients() {
-	manger.mutex.Lock()
-	old := manger.m
-	manger.m = make(map[string]*client)
-	manger.mutex.Unlock()
+	initmanager.Do(func() {
+		manager = &clientManager{
+			m: make(map[dialerConf]*client),
+		}
+		go manager.clean()
+	})
+	manager.Lock()
+	old := manager.m
+	manager.m = make(map[dialerConf]*client)
+	manager.Unlock()
 	for _, c := range old {
-		go func(c *client) {
-			c.mutex.Lock()
-			defer c.mutex.Unlock()
-			if c.conn != nil {
-				_ = c.conn.CloseWithError(closeErrCodeOK, "")
-			}
-			if c.pktConn != nil {
-				_ = c.pktConn.Close()
-			}
-			c.conn = nil
-			c.pktConn = nil
-			c.udpSM = nil
-		}(c)
+		go c.clean(true)
 	}
 }
 """
@@ -199,32 +334,59 @@ path.write_text(text)
 HYSTERIA
 # libXray's build deletes go.mod and runs "go mod init" + "go mod tidy"
 # before compiling (build/app/build.py, init_go_env), which drops any replace
-# made here and resolves xray-core afresh. Re-apply the replace inside that
-# step, right after its tidy, and fail if the hook can no longer be placed.
+# made here. Re-apply the replace and the x/net requirement right after its
+# "go mod init" (its tidy then resolves against them), check the result
+# after the tidy, and fail if the hook can no longer be placed.
 export COLITU_XRAY_REPLACE="$XRAY_MODULE=$XRAY_PATCHED"
-python3 - "$LIBXRAY_DIR/build/app/build.py" <<'GOENV'
+export COLITU_XNET_VERSION="$XNET_VERSION"
+"$PYTHON" - "$LIBXRAY_DIR/build/app/build.py" <<'GOENV'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
+after_init = '            raise Exception("go mod init failed")\n'
+after_tidy = '            raise Exception("go mod tidy failed")\n'
+pin = '''
+        colitu_replace = os.environ.get("COLITU_XRAY_REPLACE")
+        colitu_xnet = os.environ.get("COLITU_XNET_VERSION")
+        if colitu_replace:
+            if subprocess.run(["go", "mod", "edit", "-replace", colitu_replace]).returncode != 0:
+                raise Exception("colitu: go mod edit -replace failed")
+        if colitu_xnet:
+            if subprocess.run(["go", "mod", "edit", "-require", "golang.org/x/net@" + colitu_xnet]).returncode != 0:
+                raise Exception("colitu: go mod edit -require x/net failed")
+'''
+check = '''
+        if colitu_xnet:
+            got = subprocess.run(["go", "list", "-m", "-f", "{{.Version}}", "golang.org/x/net"], capture_output=True, text=True).stdout.strip()
+            if got != colitu_xnet:
+                raise Exception("colitu: golang.org/x/net is " + got + ", expected " + colitu_xnet)
+'''
+revert_marker = "    def revert_go_env(self):\n"
 start_marker = "    def init_go_env(self):\n"
 end_marker = "    def download_geo(self):\n"
-hook = (
-    "        colitu_replace = os.environ.get(\"COLITU_XRAY_REPLACE\")\n"
-    "        if colitu_replace:\n"
-    "            if subprocess.run([\"go\", \"mod\", \"edit\", \"-replace\", colitu_replace]).returncode != 0:\n"
-    "                raise Exception(\"colitu: go mod edit -replace failed\")\n"
-    "            if subprocess.run([\"go\", \"mod\", \"tidy\"]).returncode != 0:\n"
-    "                raise Exception(\"colitu: go mod tidy after replace failed\")\n"
-    "\n"
-)
 if "COLITU_XRAY_REPLACE" not in text:
     head, sep, tail = text.partition(start_marker)
-    if not sep or end_marker not in tail:
-        raise SystemExit("libXray build.py changed; cannot re-apply the xray-core replace")
     body, sep2, rest = tail.partition(end_marker)
-    text = head + sep + body.rstrip("\n") + "\n\n" + hook + sep2 + rest
+    if not sep or not sep2 or body.count(after_init) != 1 or body.count(after_tidy) != 1:
+        raise SystemExit("libXray build.py changed; cannot re-apply the xray-core replace")
+    body = body.replace(after_init, after_init + pin, 1)
+    body = body.replace(after_tidy, after_tidy + check, 1)
+    text = head + sep + body + sep2 + rest
+    # After the framework libXray rebuilds go.mod once more ("revert"),
+    # without the replace and pins: the patched sources import packages the
+    # unpatched latest xray-core lacks, so that tidy fails the build. The
+    # work directory is deleted before every build, so there is nothing to
+    # revert: the step is skipped and go.mod keeps the pinned graph (which
+    # govulncheck then reads).
+    if text.count(revert_marker) != 1:
+        raise SystemExit("libXray build.py changed; cannot skip revert_go_env")
+    text = text.replace(
+        revert_marker,
+        revert_marker + "        return  # Colitu: keep the pinned go.mod (see build-libxray.sh)\n",
+        1,
+    )
     for needed in ("import os", "import subprocess"):
         if needed not in text:
             raise SystemExit(f"libXray build.py no longer has {needed}")
@@ -232,8 +394,36 @@ path.write_text(text)
 GOENV
 echo "build-libxray: $XRAY_MODULE will be replaced by $XRAY_PATCHED (resettable Hysteria2 client cache)"
 
-echo "build-libxray: running official build: python3 build/main.py apple go"
-python3 build/main.py apple go
+if [[ -n "$CHECK_ONLY" ]]; then
+  # The Apple build without the Apple toolchain: libXray's own go.mod setup
+  # (with the pins above), every package for darwin/arm64 (cgo off; the C
+  # bridge needs Xcode), then libXray's revert step, exactly as main.py runs
+  # them around the cgo builds.
+  "$PYTHON" - <<'CHECK'
+import os
+import subprocess
+import sys
+
+build_dir = os.path.abspath("build")
+sys.path.insert(0, build_dir)
+from app.apple_go import AppleGoBuilder
+
+builder = AppleGoBuilder(build_dir)
+builder.init_go_env()
+env = dict(os.environ, GOOS="darwin", GOARCH="arm64", CGO_ENABLED="0")
+subprocess.run(["go", "build", "./..."], env=env, check=True)
+builder.revert_go_env()
+print("build-libxray: check: every libXray package builds for darwin/arm64")
+CHECK
+  run_govulncheck
+  popd >/dev/null
+  echo "build-libxray: check finished (no framework is built without a Mac)"
+  exit 0
+fi
+
+echo "build-libxray: running official build: $PYTHON build/main.py apple go"
+"$PYTHON" build/main.py apple go
+run_govulncheck
 
 popd >/dev/null
 
@@ -281,7 +471,7 @@ build_hev() {
 
 # Every slice of the xcframework gets hev linked into its libXray.a, one
 # architecture at a time, so all platforms keep resolving the same symbols.
-python3 - "$DEST/Info.plist" > "$WORK_DIR/slices.tsv" <<'SLICES'
+"$PYTHON" - "$DEST/Info.plist" > "$WORK_DIR/slices.tsv" <<'SLICES'
 import plistlib
 import sys
 
@@ -351,6 +541,7 @@ EXPECTED_SYMBOLS=(
   CGoGoSysBytes
   CGoResetHysteria
   CGoGoMemStats
+  CGoGoroutineProfile
   CGoInitDns
   CGoResetDns
   CGoRunXrayFromJSON

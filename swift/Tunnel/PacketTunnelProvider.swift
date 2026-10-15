@@ -70,6 +70,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// reads `serverProblem` from the heartbeat and offers another server.
     private var failedRestarts = 0
     private var serverProblem = false
+    /// When the core last started. The heartbeat carries it (and whether a
+    /// restart is running) so the app does not take the seconds of a restart
+    /// the extension makes itself for a stalled tunnel.
+    private var lastCoreStartAt: Date?
+    /// The server's own probe (nginx on :3443) missed while a public probe
+    /// answered. Two such misses in a session: the server has no probe, the
+    /// public hosts go first for the rest of the session.
+    private var nodeProbeMisses = 0
+    /// The online check waited its whole cap without reaching anything while
+    /// restarts were due: it cannot see this network (one that filters every
+    /// endpoint it knows), so it no longer holds restarts back or excuses
+    /// failed ones. Cleared as soon as it reaches an endpoint again.
+    private var directCheckBlind = false
     private var packetBridgeGeneration: UInt64 = 0
     private var packetBridgeRunning = false
     /// Guarded by packetBridgeLock. The one readPackets chain of this
@@ -108,6 +121,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// extension (devices on iOS 26 kill it at about 45 MB).
     private static let memoryRestartThreshold: UInt64 = 43 << 20
     private var lastMemoryRestartTick = -1000
+    /// hev's session cap. A memory restart alone frees little: in the
+    /// 2026-10-15 report about 950 goroutines were alive right after one,
+    /// and four restarts in three minutes ended with iOS killing the
+    /// extension. Each memory restart therefore lowers the cap for the rest
+    /// of this tunnel (hev then closes the least recently used session).
+    private static let sessionCapDefault = 256
+    private static let sessionCapFloor = 128
+    private var sessionCap = sessionCapDefault
+    private var lastGoroutineDumpTick = -1000
 
     override func startTunnel(options: [String: NSObject]? = nil) async throws {
         // A previous run that never reached stopTunnel was killed by iOS or
@@ -638,7 +660,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         }
         let generation = bridge.generation
         tun2socks.start(
-            config: Tun2Socks.config(socksPort: socksPort, mtu: TunMtu.intValue, username: user, password: pass),
+            config: Tun2Socks.config(socksPort: socksPort, mtu: TunMtu.intValue, username: user, password: pass, maxSessions: sessionCap),
             fd: bridge.tunFD
         ) { [weak self] result, requested in
             // Expected after stopXray; anything else is a failure the
@@ -651,6 +673,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         socksPass = pass
         probeSocksPort = probePort
         coreInterfaceType = currentPath.interfaceType
+        lastCoreStartAt = Date()
         stabilityLog("core_started", reason: "start_xray", metadata: [
             "socksPort": Int(socksPort),
             "pinned": pinnedServer != nil
@@ -705,6 +728,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
+    static let corePolicy: [String: Int] = ["handshake": 4, "connIdle": 180, "uplinkOnly": 1, "downlinkOnly": 1]
+
     static func socksCoreRequest(
         from base64Text: String,
         socksPort: UInt16,
@@ -723,7 +748,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             throw Tun2SocksConfigError.invalidConfig
         }
         var replaced = false
-        let inbounds = (config["inbounds"] as? [[String: Any]] ?? []).map { inbound -> [String: Any] in
+        // Every app on the device can reach 127.0.0.1: no local proxy without
+        // a password may run. The app's old HTTP ping inbound is dropped by
+        // its tag, and any other HTTP/SOCKS/mixed inbound without accounts by
+        // its shape (an older or hand-made configuration file).
+        let inbounds = (config["inbounds"] as? [[String: Any]] ?? [])
+            .filter { ($0["tag"] as? String) != Self.pingInboundTag && !Self.isOpenLocalProxy($0) }
+            .map { inbound -> [String: Any] in
             guard (inbound["protocol"] as? String) == "tun" else { return inbound }
             replaced = true
             var socks: [String: Any] = [
@@ -742,6 +773,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             return socks
         }
         guard replaced else { throw Tun2SocksConfigError.noTunInbound }
+        // Idle connections close after 3 minutes instead of Xray's 5, and a
+        // side that finished closes the other within a second: fewer idle
+        // connections hold goroutines under the extension's memory cap.
+        // Values the configuration already sets are kept.
+        var policy = config["policy"] as? [String: Any] ?? [:]
+        var levels = policy["levels"] as? [String: Any] ?? [:]
+        var level0 = levels["0"] as? [String: Any] ?? [:]
+        for (key, value) in Self.corePolicy where level0[key] == nil {
+            level0[key] = value
+        }
+        levels["0"] = level0
+        policy["levels"] = levels
+        config["policy"] = policy
         // Dial failures, timeouts and TLS errors show up at "warning"; the
         // access log stays off (it would list every site visited).
         config["log"] = [
@@ -803,6 +847,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     }
 
     static let probeInboundTag = "colituProbe"
+    /// The app's former ping inbound (lib/service/xray/setting/enum.dart).
+    static let pingInboundTag = "pingIn"
+
+    /// An HTTP, SOCKS or mixed inbound that takes no user name and password.
+    /// Xray's SOCKS inbound asks for them only with `auth: "password"`;
+    /// without it a list of accounts is ignored. Mirrors
+    /// ColituTunnelInbounds.isOpenLocalProxy (lib/colitu/services).
+    static func isOpenLocalProxy(_ inbound: [String: Any]) -> Bool {
+        let kind = ((inbound["protocol"] as? String) ?? "").lowercased()
+        guard kind == "http" || kind == "socks" || kind == "mixed" else { return false }
+        let settings = inbound["settings"] as? [String: Any] ?? [:]
+        let accounts = (settings["accounts"] as? [Any]) ?? (settings["users"] as? [Any]) ?? []
+        if accounts.isEmpty { return true }
+        if kind == "http" { return false }
+        return ((settings["auth"] as? String) ?? "").lowercased() != "password"
+    }
+
     /// The app's warm-spare balancer (lib/colitu/services/warm_spare.dart).
     static let warmSpareBalancerTag = "proxy-auto"
     static let coreErrorLogName = "error.log"
@@ -1236,6 +1297,8 @@ private extension PacketTunnelProvider {
         reconnectStartedUptime = nil
         failedRestarts = 0
         serverProblem = false
+        nodeProbeMisses = 0
+        directCheckBlind = false
         lastSuccessfulProbeAt = Date()
         traffic.reset()
         stabilityLog("connection_state_changed", reason: "profile_loaded")
@@ -1254,12 +1317,14 @@ private extension PacketTunnelProvider {
         keepAliveTask = nil
         trafficReportTask?.cancel()
         trafficReportTask = nil
-        writeTrafficSnapshot(coreAlive: false)
         reconnectLock.lock()
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectTaskID = nil
         reconnectLock.unlock()
+        // After the reconnect task is gone: the last heartbeat must not say
+        // "restarting" for a tunnel that has stopped.
+        writeTrafficSnapshot(coreAlive: false)
         pathRecoveryTask?.cancel()
         pathRecoveryTask = nil
         wakeRecoveryTask?.cancel()
@@ -1307,7 +1372,7 @@ private extension PacketTunnelProvider {
                 }
                 // Record the footprint trend near the cap: the next drop
                 // report then shows what grew before a kill.
-                if nearCap, self.trafficTicks % 3 == 0 {
+                if nearCap, self.trafficTicks % 15 == 0 {
                     self.stabilityLog("memory_high", reason: "footprint", metadata: ["detail": self.memoryDetail])
                 }
                 // A compact sample every two minutes (traffic, memory,
@@ -1331,6 +1396,13 @@ private extension PacketTunnelProvider {
     /// Writes the byte counters, the heartbeat time and the memory footprint;
     /// returns the footprint. "core" stays true only while the tunnel runs, so
     /// a file left with core=true means the extension died without stopping.
+    /// A core restart (or the reconnect episode around it) is running.
+    var restartInProgress: Bool {
+        reconnectLock.lock()
+        defer { reconnectLock.unlock() }
+        return restartingCore || reconnectTask != nil
+    }
+
     @discardableResult
     func writeTrafficSnapshot(coreAlive: Bool) -> UInt64 {
         let footprint = Self.memoryFootprint()
@@ -1343,6 +1415,8 @@ private extension PacketTunnelProvider {
             "ts": Int64(Date().timeIntervalSince1970 * 1000),
             "core": coreAlive,
             "serverProblem": serverProblem,
+            "restarting": restartInProgress,
+            "coreStartedAt": lastCoreStartAt.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0,
             "mem": footprint,
             "peak": peakFootprint,
             "go": goSysBytes,
@@ -1410,9 +1484,33 @@ private extension PacketTunnelProvider {
         if footprint > Self.memoryRestartThreshold, coreRunning, !restartingCore,
            trafficTicks - lastMemoryRestartTick >= 45 {
             lastMemoryRestartTick = trafficTicks
-            stabilityLog("memory_restart", reason: "footprint_at_cap", metadata: ["mb": Int(footprint >> 20), "detail": memoryDetail])
+            writeGoroutineProfile(footprint: footprint)
+            sessionCap = max(Self.sessionCapFloor, sessionCap * 3 / 4)
+            stabilityLog("memory_restart", reason: "footprint_at_cap", metadata: [
+                "mb": Int(footprint >> 20), "detail": memoryDetail, "sessionCap": sessionCap
+            ])
             restartCoreForNewSituation(reason: .memoryPressure)
         }
+    }
+
+    /// Writes the core's goroutines grouped by stack (counts, function names
+    /// and source lines; nothing about traffic) to run/goroutines.txt, at most
+    /// every ten minutes: the diagnostics report then shows which code holds
+    /// them when the memory runs out.
+    func writeGoroutineProfile(footprint: UInt64) {
+        guard trafficTicks - lastGoroutineDumpTick >= 600,
+              let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return }
+        lastGoroutineDumpTick = trafficTicks
+        let size = 24 << 10
+        var buffer = [CChar](repeating: 0, count: size)
+        let written = Int(CGoGoroutineProfile(&buffer, Int32(size)))
+        guard written > 0 else { return }
+        let profile = buffer.withUnsafeBufferPointer { pointer in
+            String(decoding: UnsafeRawBufferPointer(start: pointer.baseAddress, count: written), as: UTF8.self)
+        }
+        let header = "\(ISO8601DateFormatter().string(from: Date())) footprint \(footprint >> 20) MB, session cap \(sessionCap), \(memoryDetail)\n"
+        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try? (header + profile).write(to: runDir.adaptedAppendPath(path: "goroutines.txt"), atomically: true, encoding: .utf8)
     }
 
     /// The extension's physical memory footprint, the number iOS checks
@@ -1839,11 +1937,18 @@ private extension PacketTunnelProvider {
     /// a slow radio wake-up does not restart a healthy core.
     func confirmTunnelHealth(reason: String) async -> HealthCheckResult {
         let downBefore = traffic.snapshot().down
-        let first = await runHealthCheck(reason: reason, target: .primary, timeout: 3)
+        let targets = probeTargets()
+        let first = await runHealthCheck(reason: reason, target: targets.first, timeout: 3)
         guard first == .failed, tunnelShouldRun else { return first }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         guard tunnelShouldRun, !Task.isCancelled else { return .skipped }
-        let second = await runHealthCheck(reason: reason, target: .secondary, timeout: 6)
+        let second = await runHealthCheck(reason: reason, target: targets.second, timeout: 6)
+        if second == .success, targets.first.isServerProbe {
+            nodeProbeMisses += 1
+            if nodeProbeMisses == Self.nodeProbeMissLimit {
+                stabilityLog("node_probe_missing", reason: reason)
+            }
+        }
         // Apps kept receiving data meanwhile: the probe is what is failing
         // (a blocked probe host, say), not the tunnel.
         let received = traffic.snapshot().down &- downBefore
@@ -1854,9 +1959,30 @@ private extension PacketTunnelProvider {
         return second
     }
 
+    /// The server's probe host: the name the tunnel connects to (not an
+    /// address, whose certificate and nginx site would not match).
+    var serverProbeHost: String? {
+        guard let host = pinnedServer?.host ?? currentProfile.host,
+              !host.isEmpty, !isIPv4Address(host), !host.contains(":") else { return nil }
+        return host
+    }
+
+    static let nodeProbeMissLimit = 2
+
+    /// The two probes of a health check, in order. The server's own probe
+    /// first: no third party, and not a host a country filters (Cloudflare
+    /// is throttled in Russia, also behind a Russian exit). Without it,
+    /// Google, then Microsoft.
+    func probeTargets() -> (first: TunnelProbe.Target, second: TunnelProbe.Target) {
+        if nodeProbeMisses < Self.nodeProbeMissLimit, let host = serverProbeHost {
+            return (.server(host), .google)
+        }
+        return (.google, .microsoft)
+    }
+
     func runHealthCheck(
         reason: String,
-        target: TunnelProbe.Target = .primary,
+        target: TunnelProbe.Target = .google,
         timeout: TimeInterval = 5
     ) async -> HealthCheckResult {
         // The periodic keepalive runs every 30 s; logging each one filled the
@@ -2005,6 +2131,7 @@ private extension PacketTunnelProvider {
             // the "already running" guard used to refuse, leaving the tunnel
             // unhealthy until the next keepalive).
             while !Task.isCancelled {
+                guard await self.waitForDirectInternet(reason: reason) else { return }
                 let outcome = await self.performReconnect(reason: reason)
                 guard outcome == .failed, self.shouldKeepTrying(), self.tunnelShouldRun, !self.userInitiatedStop else { return }
                 let retryDelay = self.reconnectDelay()
@@ -2078,7 +2205,8 @@ private extension PacketTunnelProvider {
         var attempt = 0
         while tunnelShouldRun, !userInitiatedStop, !Task.isCancelled {
             attempt += 1
-            let target: TunnelProbe.Target = attempt % 2 == 1 ? .primary : .secondary
+            let targets = probeTargets()
+            let target = attempt % 2 == 1 ? targets.first : targets.second
             let result = await runHealthCheck(reason: "reconnect_validation", target: target, timeout: 4)
             if result == .success {
                 keepAliveFailCount = 0
@@ -2101,12 +2229,108 @@ private extension PacketTunnelProvider {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
         guard tunnelShouldRun, !userInitiatedStop, !Task.isCancelled else { return .aborted }
-        let transient = shouldTreatValidationFailureAsTransient(reason: reason)
+        // The device itself lost the internet meanwhile: not the server's
+        // fault, and the next attempt waits for it to come back.
+        // A check that cannot see this network (capped wait) blames nothing
+        // on it: the failure counts against the server as before.
+        let offline = !directCheckBlind && !(await deviceOnlineDirect())
+        let transient = offline || shouldTreatValidationFailureAsTransient(reason: reason)
         setStabilityState(transient ? .unhealthy : .failed, reason: "reconnect_validation_failed")
         reasserting = shouldKeepTrying()
-        stabilityLog("reconnect_failed", reason: reason.rawValue, error: "health_check_failed", metadata: ["validationAttempts": attempt])
-        noteRestartFailed()
+        stabilityLog("reconnect_failed", reason: reason.rawValue, error: offline ? "device_offline" : "health_check_failed", metadata: ["validationAttempts": attempt])
+        if !offline { noteRestartFailed() }
         return .failed
+    }
+
+    /// Well-known resolvers by address (no DNS needed) for checking the
+    /// internet outside the tunnel; the extension's own sockets do not go
+    /// through it. Yandex stays reachable on Russian whitelist-only mobile
+    /// networks, where the server may be cut off while the device is
+    /// online. Cloudflare is left out: it is throttled in Russia.
+    static let directCheckEndpoints: [(address: String, port: UInt16)] = [
+        ("8.8.8.8", 443),
+        ("77.88.8.8", 53),
+        ("208.67.222.222", 443)
+    ]
+
+    /// The endpoints of an online check: the public ones and the server
+    /// itself (its address is excluded from the tunnel route, so this
+    /// connection goes outside the tunnel too). A network that filters the
+    /// public resolvers still counts as online when the server answers.
+    func directCheckTargets() -> [(address: String, port: UInt16)] {
+        var targets = Self.directCheckEndpoints
+        if let address = pinnedServer?.ipv4 ?? currentProfile.host.flatMap({ isIPv4Address($0) ? $0 : nil }),
+           let port = currentProfile.port, port != 0 {
+            targets.append((address: address, port: port))
+        }
+        return targets
+    }
+
+    /// Whether the device reaches the internet outside the tunnel. A refused
+    /// connection counts too: the answer came back over the network. Answers
+    /// with the first endpoint that is reached; false once all have failed.
+    func deviceOnlineDirect() async -> Bool {
+        let targets = directCheckTargets()
+        let online = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let latch = FirstSuccessLatch(pending: targets.count, continuation: continuation)
+            for endpoint in targets {
+                DispatchQueue.global(qos: .utility).async {
+                    let result = TunnelProbe.tcpConnect(ipv4: endpoint.address, port: endpoint.port, timeout: 3)
+                    latch.report(result == "ok" || result == "refused")
+                }
+            }
+        }
+        if online { directCheckBlind = false }
+        return online
+    }
+
+    /// Longest hold of a restart for a device that looks offline. The online
+    /// check can miss on a network that filters every endpoint it knows
+    /// (an IPv6-only network, say): the restart then goes ahead anyway.
+    static let offlineWaitCapSeconds: TimeInterval = 75
+
+    /// Holds a restart while the device itself has no internet (the iOS path
+    /// can read "satisfied" on a dead cellular link). Restarting then only
+    /// dropped every open connection, 13 times in 12 minutes in one test,
+    /// and the failed restarts made the app blame the server. A dead core,
+    /// the memory valve and an app reload restart regardless, and so does
+    /// any restart after `offlineWaitCapSeconds`. Returns false when the
+    /// tunnel stops meanwhile.
+    func waitForDirectInternet(reason: StabilityReconnectReason) async -> Bool {
+        switch reason {
+        case .coreProcessFailed, .memoryPressure, .appReload:
+            return true
+        default:
+            break
+        }
+        var waitingSince: TimeInterval?
+        while tunnelShouldRun, !userInitiatedStop, !Task.isCancelled {
+            if await deviceOnlineDirect() {
+                if let since = waitingSince {
+                    stabilityLog("offline_wait_ended", reason: reason.rawValue, metadata: ["waitedSec": Int(Self.awakeClock - since)])
+                }
+                return true
+            }
+            // The check already missed for a whole wait in this episode:
+            // it cannot see this network, so it holds nothing back.
+            if directCheckBlind { return true }
+            let since = waitingSince ?? Self.awakeClock
+            if waitingSince == nil {
+                waitingSince = since
+                reasserting = false
+                setStabilityState(.unhealthy, reason: "device_offline")
+                stabilityLog("offline_wait_started", reason: reason.rawValue)
+            }
+            let waited = Self.awakeClock - since
+            if waited >= Self.offlineWaitCapSeconds {
+                directCheckBlind = true
+                stabilityLog("offline_wait_capped", reason: reason.rawValue, metadata: ["waitedSec": Int(waited)])
+                return true
+            }
+            let pause = min(waited < 60 ? 10 : 30, Self.offlineWaitCapSeconds - waited)
+            try? await Task.sleep(nanoseconds: UInt64(max(1, pause) * 1_000_000_000))
+        }
+        return false
     }
 
     /// How long a restarted core gets to answer its first probe.
@@ -2236,16 +2460,22 @@ private final class TrafficCounter: @unchecked Sendable {
 /// SOCKS5 carries the host name, so the check does not depend on DNS either.
 /// Any HTTP status line proves the whole path (core → server → internet).
 enum TunnelProbe {
-    enum Target {
-        case primary
-        case secondary
+    struct Target {
+        let host: String
+        let port: UInt16
+        let path: String
+        let isServerProbe: Bool
 
-        var host: String {
-            switch self {
-            case .primary: return "cp.cloudflare.com"
-            case .secondary: return "www.gstatic.com"
-            }
+        /// The server's own probe: nginx on :3443 (the DoH and speed-test
+        /// site). The request goes as plain HTTP to that TLS port and nginx
+        /// answers "400 plain HTTP request sent to HTTPS port", a status line
+        /// all the same, so no TLS is needed here.
+        static func server(_ host: String) -> Target {
+            Target(host: host, port: 3443, path: "/ping", isServerProbe: true)
         }
+
+        static let google = Target(host: "www.gstatic.com", port: 80, path: "/generate_204", isServerProbe: false)
+        static let microsoft = Target(host: "www.msftconnecttest.com", port: 80, path: "/connecttest.txt", isServerProbe: false)
     }
 
     /// Plain TCP connect with a timeout: "ok", "timeout", "refused",
@@ -2320,9 +2550,10 @@ enum TunnelProbe {
               let auth = receive(fd, count: 2, until: deadline),
               auth[1] == 0 else { return false }
 
-        // CONNECT host:80 by name.
+        // CONNECT host:port by name.
         let host = Array(target.host.utf8)
-        guard send(fd, [5, 1, 0, 3, UInt8(host.count)] + host + [0, 80]),
+        guard host.count < 256,
+              send(fd, [5, 1, 0, 3, UInt8(host.count)] + host + [UInt8(target.port >> 8), UInt8(target.port & 0xFF)]),
               let reply = receive(fd, count: 4, until: deadline),
               reply[0] == 5, reply[1] == 0 else { return false }
         let boundLength: Int
@@ -2336,7 +2567,7 @@ enum TunnelProbe {
         }
         guard receive(fd, count: boundLength, until: deadline) != nil else { return false }
 
-        let request = "GET /generate_204 HTTP/1.1\r\nHost: \(target.host)\r\nUser-Agent: Colitu\r\nConnection: close\r\n\r\n"
+        let request = "GET \(target.path) HTTP/1.1\r\nHost: \(target.host)\r\nUser-Agent: Colitu\r\nConnection: close\r\n\r\n"
         guard send(fd, Array(request.utf8)),
               let status = receive(fd, count: 7, until: deadline) else { return false }
         return status == Array("HTTP/1.".utf8)
@@ -2394,6 +2625,34 @@ struct PinnedServer {
     let ipv4: String
 }
 
+/// Resumes its continuation once: true with the first success, false when
+/// every check has failed. The checks report from several threads.
+private final class FirstSuccessLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending: Int
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(pending: Int, continuation: CheckedContinuation<Bool, Never>) {
+        self.pending = pending
+        self.continuation = continuation
+        if pending <= 0 {
+            self.continuation = nil
+            continuation.resume(returning: false)
+        }
+    }
+
+    func report(_ reached: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let waiting = continuation else { return }
+        pending -= 1
+        if reached || pending == 0 {
+            continuation = nil
+            waiting.resume(returning: reached)
+        }
+    }
+}
+
 private enum Tun2SocksConfigError: Error {
     case invalidRequest
     case invalidConfig
@@ -2423,7 +2682,11 @@ private final class Tun2Socks: @unchecked Sendable {
     /// core every minute. 256 sessions should stay near 1,100 goroutines (about
     /// 34 MB), and a 30 s UDP timeout frees finished DNS lookups twice as
     /// fast, so the cap is rarely reached by lookups alone.
-    static func config(socksPort: UInt16, mtu: Int, username: String, password: String) -> String {
+    ///
+    /// Idle TCP sessions close after 3 minutes (was 5, the same as the
+    /// core's connIdle below): apps keep many keep-alive connections open,
+    /// and each idle one held its goroutines in the core.
+    static func config(socksPort: UInt16, mtu: Int, username: String, password: String, maxSessions: Int = 256) -> String {
         """
         tunnel:
           mtu: \(mtu)
@@ -2438,9 +2701,9 @@ private final class Tun2Socks: @unchecked Sendable {
           tcp-buffer-size: 8192
           udp-copy-buffer-nums: 4
           udp-recv-buffer-size: 262144
-          max-session-count: 256
+          max-session-count: \(maxSessions)
           connect-timeout: 10000
-          tcp-read-write-timeout: 300000
+          tcp-read-write-timeout: 180000
           udp-read-write-timeout: 30000
           log-file: stderr
           log-level: warn

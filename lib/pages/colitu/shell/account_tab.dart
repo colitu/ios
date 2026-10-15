@@ -526,7 +526,11 @@ class _AccountTabState extends State<AccountTab> {
               ColituSegment<String>(
                 values: ColituLoc.languages,
                 selected: loc.language,
-                onChanged: (value) => ColituLoc.I.setLanguage(value),
+                onChanged: (value) async {
+                  await ColituLoc.I.setLanguage(value);
+                  // The panel learns the new language with the next request.
+                  unawaited(widget.controller.languageChanged());
+                },
                 labelOf: (value) => switch (value) {
                   'ru' => 'Русский',
                   'tr' => 'Türkçe',

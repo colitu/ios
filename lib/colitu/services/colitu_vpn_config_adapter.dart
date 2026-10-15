@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
@@ -11,12 +10,8 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/core/constants/preferences.dart';
 import 'package:colitu_vpn/core/db/database/constants.dart';
 import 'package:colitu_vpn/core/db/database/database.dart';
-import 'package:colitu_vpn/core/db/database/enum.dart';
 import 'package:colitu_vpn/core/model/xray_json.dart';
-import 'package:colitu_vpn/core/network/client.dart';
 import 'package:colitu_vpn/core/pigeon/host_api.dart';
-import 'package:colitu_vpn/core/tools/json.dart';
-import 'package:colitu_vpn/service/share/xray_share_reader.dart';
 import 'package:colitu_vpn/service/ping/state.dart';
 import 'package:colitu_vpn/service/xray/json_writer.dart';
 import 'package:colitu_vpn/service/xray/outbound/state.dart';
@@ -88,11 +83,12 @@ class ColituVPNConfigAdapter {
     lastChosenProtocol = null;
     lastChosenLatencyMs = -1;
 
-    if (_hasValue(config.rawConfig)) {
-      rows.addAll(await _rowsFromText(config.rawConfig!, name));
-    }
-
-    if (rows.isEmpty && config.outboundCandidates.isNotEmpty) {
+    // Only typed outbounds are turned into a core config. A raw Xray JSON,
+    // a share link or a subscription URL from the server (pre-contract
+    // fields) is ignored: it could carry its own routing, DNS hosts or
+    // inbounds and send traffic around the tunnel while the app shows
+    // "connected".
+    if (config.outboundCandidates.isNotEmpty) {
       rows.add(
         await _bestCandidateRow(
           _withoutSkipped(config.outboundCandidates, skipProtocols),
@@ -106,13 +102,6 @@ class ColituVPNConfigAdapter {
       );
     } else if (rows.isEmpty && config.outboundConfig != null) {
       rows.add(_rowFromOutboundMap(config.outboundConfig!, name));
-    }
-
-    if (rows.isEmpty && _hasValue(config.subscriptionUrl)) {
-      final text = await NetClient().getText(config.subscriptionUrl!);
-      if (_hasValue(text)) {
-        rows.addAll(await _rowsFromText(text!, name));
-      }
     }
 
     if (rows.isEmpty) {
@@ -170,23 +159,6 @@ class ColituVPNConfigAdapter {
     Map<String, dynamic> outboundJson,
     String name,
   ) => _stateFromOutboundMap(outboundJson, name);
-
-  Future<List<CoreConfigCompanion>> _rowsFromText(
-    String text,
-    String name,
-  ) async {
-    final trimmed = text.trim();
-    if (trimmed.startsWith('{')) {
-      final json = JsonTool.decoder.convert(trimmed) as Map<String, dynamic>;
-      if (json['outbounds'] is List) {
-        return [_rowFromRawJson(json, name)];
-      }
-      if (json['protocol'] != null) {
-        return [_rowFromOutboundMap(json, name)];
-      }
-    }
-    return XrayShareReader().parseShareText(trimmed);
-  }
 
   CoreConfigCompanion _rowFromOutboundMap(
     Map<String, dynamic> outboundJson,
@@ -412,7 +384,7 @@ class ColituVPNConfigAdapter {
         final xrayJson = XrayJsonStandard.standard;
         xrayJson.outbounds = [entry.state.xrayJson];
         xrayJson.inbounds = [inbound.xrayJson];
-        probe = xrayJson.ping(ping, port);
+        probe = xrayJson.ping(ping, inbound.proxyUrl);
       }
       return await probe.timeout(
         timeout + const Duration(milliseconds: 700),
@@ -439,19 +411,6 @@ class ColituVPNConfigAdapter {
     }
   }
 
-  CoreConfigCompanion _rowFromRawJson(Map<String, dynamic> json, String name) {
-    final text = JsonTool.encoderForDb.convert(json);
-    final base64Data = base64Encode(utf8.encode(text));
-    return CoreConfigCompanion.insert(
-      name: name,
-      type: CoreConfigType.raw.name,
-      tags: 'colitu,api',
-      data: Value<String>(base64Data),
-      delay: PingDelayConstants.unknown,
-      subId: DBConstants.defaultId,
-    );
-  }
-
   Future<void> _deletePreviousRuntimeConfig() async {
     final previousId = await PreferencesKey().readColituRuntimeConfigId();
     if (previousId == DBConstants.defaultId) {
@@ -471,8 +430,6 @@ class ColituVPNConfigAdapter {
     }
     return config.serverId.isEmpty ? 'Colitu VPN' : 'Colitu ${config.serverId}';
   }
-
-  bool _hasValue(String? value) => value != null && value.trim().isNotEmpty;
 
   CoreConfigCompanion _selectBestRow(
     List<CoreConfigCompanion> rows,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
@@ -29,6 +30,8 @@ class ColituMfaPage extends StatefulWidget {
 class _ColituMfaPageState extends State<ColituMfaPage> {
   final _code = TextEditingController();
   var _recovery = false;
+  // Recovery codes are masked like a password; the eye shows them.
+  var _showRecovery = false;
   var _loading = false;
   String? _error;
 
@@ -114,6 +117,7 @@ class _ColituMfaPageState extends State<ColituMfaPage> {
   void _toggleRecovery() {
     setState(() {
       _recovery = !_recovery;
+      _showRecovery = false;
       _error = null;
       _code.clear();
     });
@@ -178,6 +182,22 @@ class _ColituMfaPageState extends State<ColituMfaPage> {
                     controller: _code,
                     label: _recovery ? loc['mfa.recoveryCode'] : loc['mfa.code'],
                     hint: _recovery ? 'xxxx-xxxx' : '••••••',
+                    obscureText: _recovery && !_showRecovery,
+                    suffix: _recovery
+                        ? IconButton(
+                            tooltip: loc['auth.show'],
+                            onPressed: () => setState(
+                              () => _showRecovery = !_showRecovery,
+                            ),
+                            icon: Icon(
+                              _showRecovery
+                                  ? CupertinoIcons.eye_slash
+                                  : CupertinoIcons.eye,
+                              size: 20,
+                              color: ColituColors.dim,
+                            ),
+                          )
+                        : null,
                     keyboardType: _recovery
                         ? TextInputType.visiblePassword
                         : TextInputType.number,

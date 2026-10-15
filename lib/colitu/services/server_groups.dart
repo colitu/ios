@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/l10n/server_names.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 
 /// Servers of one country, in the order the list was sorted. A group with one
@@ -82,8 +83,13 @@ bool isGroupExpanded(
 }) => overrides[group.key] ?? group.contains(selectedKey);
 
 /// City label of a row inside a country group: the server's city, else its
-/// usual name.
+/// usual name, both in the app language.
 String serverCityLabel(VPNServer server) {
-  final city = server.city?.trim() ?? '';
-  return city.isNotEmpty ? city : server.displayTitle;
+  final city = ColituServerNames.city(server.city);
+  return city.isNotEmpty
+      ? city
+      : ColituServerNames.displayName(
+          server.displayTitle,
+          countryCode: server.countryCode,
+        );
 }

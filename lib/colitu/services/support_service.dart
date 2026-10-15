@@ -7,7 +7,11 @@ import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:colitu_vpn/colitu/api/api_client.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
+import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/services/log_redaction.dart';
+import 'package:colitu_vpn/colitu/services/site_redaction.dart';
+import 'package:colitu_vpn/colitu/services/tunnel_diagnostics_service.dart';
 
 /// One live-support conversation (panel `/api/v1/support`).
 class SupportConversation {
@@ -116,6 +120,26 @@ class SupportMessage {
   }
 }
 
+/// A connection-report request a support agent made for this device.
+class DiagnosticsRequest {
+  const DiagnosticsRequest({required this.id});
+
+  final String id;
+
+  /// `{"data":{"request":null}}` or the pending request; anything else
+  /// (also a request that is no longer pending) is no request.
+  static DiagnosticsRequest? fromResponse(Object? json) {
+    final data = json is Map<String, dynamic> ? json['data'] : null;
+    final request = data is Map<String, dynamic> ? data['request'] : null;
+    if (request is! Map<String, dynamic>) return null;
+    final id = '${request['id'] ?? ''}';
+    if (id.isEmpty) return null;
+    final status = request['status'];
+    if (status != null && status != 'pending') return null;
+    return DiagnosticsRequest(id: id);
+  }
+}
+
 class SupportUpload {
   const SupportUpload(this.name, this.bytes);
 
@@ -187,6 +211,58 @@ class ColituSupportService {
       (_) => null,
       data: () => _body({'body': body}, files),
     );
+  }
+
+  /// The report an agent asked for, if one is waiting for this device.
+  Future<DiagnosticsRequest?> pendingDiagnosticsRequest() {
+    return _client.get(APIEndpoint.supportDiagnosticsRequest, DiagnosticsRequest.fromResponse);
+  }
+
+  /// Sends the automatic report of a new conversation.
+  Future<void> uploadDiagnostics(String conversationId, String report) async {
+    final payload = await _reportPayload(report);
+    await _client.postRenewing(
+      APIEndpoint.supportDiagnostics(conversationId),
+      (_) => null,
+      data: () => payload,
+    );
+  }
+
+  /// Answers an agent's request. A 404 means it is no longer pending: the
+  /// report is not needed and nothing is thrown.
+  Future<void> answerDiagnosticsRequest(String requestId, String report) async {
+    final payload = await _reportPayload(report);
+    try {
+      await _client.postRenewing(
+        APIEndpoint.supportDiagnosticsReport(requestId),
+        (_) => null,
+        data: () => payload,
+      );
+    } on APIException catch (error) {
+      if (error.statusCode != 404) rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _reportPayload(String report) async {
+    final package = await PackageInfo.fromPlatform();
+    var os = Platform.operatingSystemVersion;
+    try {
+      if (Platform.isIOS) os = 'iOS ${(await DeviceInfoPlugin().iosInfo).systemVersion}';
+    } catch (_) {}
+    return {
+      'report': report,
+      'platform': Platform.isIOS ? 'ios' : Platform.operatingSystem,
+      'app_version': '${package.version}+${package.buildNumber}',
+      'os_version': os,
+    };
+  }
+
+  /// The full connection report: app, device, tunnel stops, stability
+  /// events and error logs. Secrets are redacted, and the sites visited are
+  /// masked on the device ([knownHosts]: Colitu's own servers stay readable).
+  static Future<String> connectionReport({Iterable<String> knownHosts = const []}) async {
+    final text = LogRedaction.redact(await TunnelDiagnosticsService().buildReport());
+    return SiteRedaction.mask(text, knownHosts: knownHosts);
   }
 
   Future<Uint8List> attachment(String id) => _client.getBytes(APIEndpoint.supportAttachment(id));

@@ -9,6 +9,9 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_survey.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
+import 'package:colitu_vpn/colitu/services/diagnostics_request_watcher.dart';
+import 'package:colitu_vpn/colitu/services/site_redaction.dart';
+import 'package:colitu_vpn/colitu/services/support_service.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/paused/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/account_tab.dart';
@@ -36,6 +39,12 @@ class ColituShellPage extends StatefulWidget {
 
 class _ColituShellPageState extends State<ColituShellPage> {
   final _controller = ColituConnectionController();
+  late final DiagnosticsRequestWatcher _reportWatcher = DiagnosticsRequestWatcher(
+    api: ColituSupportService(),
+    buildReport: () => ColituSupportService.connectionReport(
+      knownHosts: SiteRedaction.serverHosts(_controller.servers),
+    ),
+  );
   late ColituTab _tab = widget.initialTab;
   String? _shownNotice;
   var _sessionEnded = false;
@@ -51,11 +60,14 @@ class _ColituShellPageState extends State<ColituShellPage> {
     super.initState();
     _controller.onSessionEnded = _onSessionEnded;
     _controller.addListener(_onControllerChanged);
-    unawaited(_controller.init());
+    unawaited(_controller.init().then((_) {
+      if (mounted && !_sessionEnded) _reportWatcher.start();
+    }));
   }
 
   @override
   void dispose() {
+    _reportWatcher.dispose();
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
