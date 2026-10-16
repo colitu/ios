@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/config/adaptive_connect3.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -21,6 +22,7 @@ class ServerCatalog {
     this.clientCountry = '',
     this.clientNetwork = '',
     this.hints,
+    this.adaptiveConnect3,
   ]);
 
   final List<VPNServer> servers;
@@ -37,6 +39,10 @@ class ServerCatalog {
   /// `network_token` and `network_hints` for [clientNetwork]; null when the
   /// network is unknown.
   final ColituNetworkHints? hints;
+
+  /// The panel's Adaptive Connect 3.0 switch for this device
+  /// (`features.adaptive_connect_3`); null from an older panel.
+  final bool? adaptiveConnect3;
 }
 
 class ColituVPNService {
@@ -72,6 +78,7 @@ class ColituVPNService {
         text('client_country').toUpperCase(),
         text('client_network'),
         ColituNetworkHints.fromServers(json, text('client_network')),
+        ColituAc3Switch.parse(json),
       );
     }, queryParameters: _freshQuery());
   }

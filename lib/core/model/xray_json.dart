@@ -90,6 +90,9 @@ class XrayDnsServer {
   bool? disableCache;
   bool? finalQuery;
 
+  /// Per-query timeout in milliseconds (Xray's default is 4000).
+  int? timeoutMs;
+
   XrayDnsServer(
     this.address,
     this.skipFallback,

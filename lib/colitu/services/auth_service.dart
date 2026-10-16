@@ -16,19 +16,49 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 /// A device (a TV) that shows a QR code and waits for a phone to approve it.
 class LinkRequest {
-  const LinkRequest({required this.code, required this.deviceName, required this.platform, this.country});
+  const LinkRequest({
+    required this.code,
+    required this.deviceName,
+    required this.platform,
+    this.country,
+    this.approverCountry,
+    this.countryMismatch = false,
+    this.reauth,
+  });
 
   final String code;
   final String deviceName;
   final String platform;
   final String? country;
 
+  /// Where this phone is, for the country-mismatch warning.
+  final String? approverCountry;
+  final bool countryMismatch;
+
+  /// The proof the panel wants before approving: `password` or `mfa`. Null on
+  /// an older panel, which approves without one.
+  final String? reauth;
+
   factory LinkRequest.fromJson(Map<String, dynamic> json) => LinkRequest(
     code: '${json['code'] ?? ''}',
     deviceName: '${json['device_name'] ?? ''}',
     platform: '${json['platform'] ?? ''}',
-    country: (json['country'] as String?)?.trim().isEmpty ?? true ? null : json['country'] as String,
+    country: _text(json['country']),
+    approverCountry: _text(json['approver_country']),
+    countryMismatch: json['country_mismatch'] == true,
+    reauth: _reauth(json['reauth']),
   );
+
+  static String? _text(Object? value) {
+    if (value is! String) return null;
+    final text = value.trim();
+    return text.isEmpty ? null : text;
+  }
+
+  static String? _reauth(Object? value) {
+    final method = _text(value)?.toLowerCase();
+    return method == 'password' || method == 'mfa' ? method : null;
+  }
 
   /// Reads the code out of a scanned QR (https://colitu.com/link?c=CODE) or a
   /// typed "ABCD-2345"; null when it is neither.
@@ -48,6 +78,20 @@ class LinkRequest {
 
   /// "ABCD2345" → "ABCD-2345", the way the TV and the website show it.
   static String shown(String code) => code.length == 8 ? '${code.substring(0, 4)}-${code.substring(4)}' : code;
+}
+
+/// Body of POST /auth/link/approve|deny. The password (`reauth == 'password'`)
+/// or the 2FA / recovery code goes along only when approving.
+Map<String, Object> linkDecisionBody(String code, {required bool approve, String? reauth, String? proof}) {
+  final body = <String, Object>{'code': code};
+  if (approve && proof != null && proof.isNotEmpty) {
+    if (reauth == 'password') {
+      body['password'] = proof;
+    } else {
+      body['mfa_code'] = proof.trim();
+    }
+  }
+  return body;
 }
 
 /// Sign-in passed the password and now needs the second step: a code from
@@ -195,11 +239,13 @@ class AuthService {
   }
 
   /// Approves (signs the waiting device in to this account) or declines.
-  Future<void> decideLink(String code, {required bool approve}) async {
+  /// [proof] is the password or the 2FA / recovery code the lookup asked for
+  /// ([reauth] says which); it is only sent when approving.
+  Future<void> decideLink(String code, {required bool approve, String? reauth, String? proof}) async {
     await _client.postRenewing(
       approve ? APIEndpoint.linkApprove : APIEndpoint.linkDeny,
       (_) => null,
-      data: () => {'code': code},
+      data: () => linkDecisionBody(code, approve: approve, reauth: reauth, proof: proof),
     );
   }
 

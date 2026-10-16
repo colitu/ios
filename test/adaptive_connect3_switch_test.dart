@@ -6,8 +6,32 @@ import 'package:colitu_vpn/colitu/services/vpn_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('Adaptive Connect 3.0 is off in this release', () {
+  test('Adaptive Connect 3.0 is off until the panel turns it on', () {
     expect(kAdaptiveConnect3, isFalse);
+    expect(ColituAc3Switch.enabled, isFalse);
+  });
+
+  group('panel rollout switch', () {
+    test('build or panel turns it on', () {
+      expect(ColituAc3Switch.enabledFor(buildForced: false, remote: false), isFalse);
+      expect(ColituAc3Switch.enabledFor(buildForced: false, remote: true), isTrue);
+      expect(ColituAc3Switch.enabledFor(buildForced: true, remote: false), isTrue);
+    });
+
+    test('features.adaptive_connect_3 from the server list', () {
+      expect(ColituAc3Switch.parse({'features': {'adaptive_connect_3': true}}), isTrue);
+      expect(ColituAc3Switch.parse({'features': {'adaptive_connect_3': false}}), isFalse);
+      expect(ColituAc3Switch.parse({'features': {'adaptive_connect_3': 'yes'}}), isNull);
+      expect(ColituAc3Switch.parse({'servers': []}), isNull);
+      expect(ColituAc3Switch.parse(null), isNull);
+    });
+
+    test('setRemote turns it on and off', () {
+      ColituAc3Switch.setRemote(true);
+      expect(ColituAc3Switch.enabled, isTrue);
+      ColituAc3Switch.setRemote(false);
+      expect(ColituAc3Switch.enabled, isFalse);
+    });
   });
 
   group('hinted start', () {

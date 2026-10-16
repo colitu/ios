@@ -16,6 +16,10 @@ class VPNServer {
   final String status;
   final bool available;
   final bool locked;
+
+  /// A hidden CSL test node (sent to tester accounts only): a manual choice
+  /// only, the automatic mode never picks it.
+  final bool alpha;
   final String? requiredPlan;
   final bool isPremium;
   final bool isFree;
@@ -85,6 +89,7 @@ class VPNServer {
     required this.status,
     required this.available,
     required this.locked,
+    this.alpha = false,
     this.requiredPlan,
     required this.isPremium,
     required this.isFree,
@@ -236,6 +241,7 @@ class VPNServer {
           '${json['status'] ?? (json['available'] == false ? 'OFFLINE' : 'AVAILABLE')}',
       available: available,
       locked: locked,
+      alpha: json['alpha'] == true,
       requiredPlan: requiredPlan,
       isPremium: premium,
       isFree: _bool(json['free']) || !premium,
@@ -408,6 +414,11 @@ class VPNConfig {
   final RouteEndpoint? entry;
   final RouteEndpoint? exit;
 
+  /// The panel's `credentials_pending`: this device's credential on the
+  /// server is new and the node had not confirmed it yet. The server is
+  /// retried for a few seconds before it counts as failed.
+  final bool credentialsPending;
+
   const VPNConfig({
     required this.id,
     required this.serverId,
@@ -421,6 +432,7 @@ class VPNConfig {
     this.isMultihop = false,
     this.entry,
     this.exit,
+    this.credentialsPending = false,
   });
 
   /// A multihop route and a rotating exit run on VLESS only: the other
@@ -446,6 +458,7 @@ class VPNConfig {
       isMultihop: isMultihop,
       entry: entry,
       exit: exit,
+      credentialsPending: credentialsPending,
     );
   }
 
@@ -486,6 +499,7 @@ class VPNConfig {
         outboundCandidates: candidates,
         expiresAt: _date(json['expires_at']),
         isMultihop: _map(json['server'])?['multihop'] == true,
+        credentialsPending: json['credentials_pending'] == true,
         entry: RouteEndpoint.tryParse(_map(json['server'])?['entry']),
         exit: RouteEndpoint.tryParse(_map(json['server'])?['exit']),
       );

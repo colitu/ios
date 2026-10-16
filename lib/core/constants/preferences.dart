@@ -334,6 +334,17 @@ class PreferencesKey {
   Future<void> saveColituNetworkHints(String value) =>
       _prefs.setString(_colituNetworkHints, value);
 
+  static const _colituAc3Remote = "colituAc3Remote";
+
+  /// The panel's last Adaptive Connect 3.0 switch for this device.
+  Future<bool> readColituAc3Remote() async =>
+      await _prefs.getBool(_colituAc3Remote) ?? false;
+
+  Future<void> saveColituAc3Remote(bool value) =>
+      _prefs.setBool(_colituAc3Remote, value);
+
+  Future<void> clearColituAc3Remote() => _prefs.remove(_colituAc3Remote);
+
   static const _colituWarmSpare = "colituWarmSpare";
   static const _colituWarmSpareChoice = "colituWarmSpareChoice";
 

@@ -169,6 +169,21 @@ void main() {
       expect(VPNConfig.fromJson(json).isMultihop, isFalse);
     });
 
+    test('credentials_pending is read and survives the VLESS filter', () {
+      expect(VPNConfig.fromJson(envelope()).credentialsPending, isFalse);
+      final pending = VPNConfig.fromJson(
+        envelope()..['credentials_pending'] = true,
+      );
+      expect(pending.credentialsPending, isTrue);
+      expect(pending.onlyVless()?.credentialsPending, isTrue);
+      expect(
+        VPNConfig.fromJson(
+          envelope()..['credentials_pending'] = 'yes',
+        ).credentialsPending,
+        isFalse,
+      );
+    });
+
     test('the route id is escaped in the path', () {
       expect(
         APIEndpoint.multihopRouteConfig('a/b c'),

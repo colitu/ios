@@ -82,6 +82,28 @@ void main() {
       expect(autoExcluded(ru), isTrue);
     });
 
+    test('alpha test nodes are never picked, even fastest or remembered', () {
+      final csl = VPNServer.fromJson({
+        'id': 'csl',
+        'name': 'csl',
+        'countryCode': 'SE',
+        'available': true,
+        'alpha': true,
+      });
+      expect(csl.alpha, isTrue);
+      expect(de.alpha, isFalse);
+      final memory = ColituAdaptiveMemory()..recordSuccess(wifi, 'csl', 'trojan', now);
+      expect(
+        rank(
+          [csl, de, nl],
+          pings: {'csl': ping(5), 'de': ping(80), 'nl': ping(60)},
+          memory: memory,
+        ),
+        ['nl', 'de'],
+      );
+      expect(autoExcluded(csl), isTrue);
+    });
+
     test('without pings or memory the panel order stays', () {
       expect(rank(panel), ['de', 'nl', 'tr', 'fi']);
     });
@@ -107,16 +129,23 @@ void main() {
       );
     });
 
-    test('old pings and pings from another network do not count', () {
+    test('pings older than 6 h and pings from another network do not count', () {
       expect(
         rank(
           panel,
           pings: {
-            'fi': ping(30, age: const Duration(minutes: 11)),
+            'fi': ping(30, age: const Duration(hours: 7)),
             'nl': ping(20, net: lte),
           },
         ),
         ['de', 'nl', 'tr', 'fi'],
+      );
+    });
+
+    test('a successful ping up to 6 h old still orders the servers', () {
+      expect(
+        rank(panel, pings: {'fi': ping(30, age: const Duration(minutes: 11))}),
+        ['fi', 'de', 'nl', 'tr'],
       );
     });
 

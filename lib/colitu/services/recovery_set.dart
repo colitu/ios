@@ -147,8 +147,9 @@ abstract final class ColituRecovery {
   static VPNConfig? next(ColituRecoverySet set, Iterable<String> failed) =>
       serversToTry(set, failed).firstOrNull;
 
-  /// Fetch in the background: no stored set or one generated more than 24 h
-  /// ago, and the last attempt at least 6 h back (a failed attempt counts).
+  /// Fetch in the background: no stored set or one generated 24 h ago or
+  /// more (or dated in the future), and the last attempt at least 6 h back
+  /// (a failed attempt counts).
   /// Never with [enabled] false (`kAdaptiveConnect3`).
   static bool refreshDue({
     required DateTime? generatedAt,
@@ -162,6 +163,9 @@ abstract final class ColituRecovery {
         now.difference(lastAttempt) < attemptEvery) {
       return false;
     }
-    return generatedAt == null || now.difference(generatedAt) > refreshAfter;
+    if (generatedAt == null) return true;
+    // Dated more than 5 minutes in the future: the clock moved back.
+    if (generatedAt.difference(now) > const Duration(minutes: 5)) return true;
+    return now.difference(generatedAt) >= refreshAfter;
   }
 }

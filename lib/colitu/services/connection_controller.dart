@@ -101,6 +101,11 @@ class ColituConnectionController extends ChangeNotifier
   static const _verifyWindow = Duration(seconds: 4);
   static const _serverBudget = Duration(seconds: 20);
   static const _connectBudget = Duration(seconds: 45);
+
+  /// A server with credentials_pending is retried this long, this often.
+  static const _credentialSettleManual = Duration(seconds: 20);
+  static const _credentialSettleAutomatic = Duration(seconds: 8);
+  static const _credentialRetry = Duration(seconds: 2);
   static const _maxServersPerConnect = 3;
 
   /// The warm spare's config never delays the connect by more than this.
@@ -732,6 +737,7 @@ class ColituConnectionController extends ChangeNotifier
       _clientCountry = await prefs.readColituClientCountry() ?? '';
       _clientNetwork = await prefs.readColituClientNetwork() ?? '';
       _hints = ColituNetworkHints.decode(await prefs.readColituNetworkHints());
+      ColituAc3Switch.setRemote(await prefs.readColituAc3Remote());
     } catch (e) {
       debugPrint('Adaptive Connect memory not loaded: $e');
     }
@@ -756,6 +762,12 @@ class ColituConnectionController extends ChangeNotifier
   /// Keeps the last non-empty client country and network: a list fetched
   /// through the tunnel carries neither, and must not overwrite them.
   void _rememberPlace(ServerCatalog catalog) {
+    // Through the VPN too: the switch belongs to the device, not the network.
+    final ac3 = catalog.adaptiveConnect3;
+    if (ac3 != null && ac3 != ColituAc3Switch.remote) {
+      ColituAc3Switch.setRemote(ac3);
+      unawaited(_quietly(() => PreferencesKey().saveColituAc3Remote(ac3)));
+    }
     final country = catalog.clientCountry;
     final network = catalog.clientNetwork;
     if (country.isNotEmpty && country != _clientCountry) {
@@ -951,6 +963,10 @@ class ColituConnectionController extends ChangeNotifier
         final serverEnd = DateTime.now().add(_serverBudget);
         final ({_Attempt outcome, bool engineStalled}) result;
         _serverFallbacks = index;
+        _telemetry.tryingServer(
+          nodeId: candidate.isMultihop ? null : candidate.id,
+          fallbacks: index,
+        );
         try {
           result = await _connectServer(
             candidate,
@@ -1144,7 +1160,7 @@ class ColituConnectionController extends ChangeNotifier
 
   Future<ColituRecoverySet?> _storedRecoverySet() async {
     // Off-switch: no stored set is ever used (listless connect, recovery).
-    if (!kAdaptiveConnect3) return null;
+    if (!ColituAc3Switch.enabled) return null;
     try {
       return ColituRecoverySet.parse(await _tokenStore.readRecoverySet());
     } catch (_) {
@@ -1164,7 +1180,7 @@ class ColituConnectionController extends ChangeNotifier
   /// stored or it is older than 24 h, at most one attempt per 6 h. Never
   /// blocks anything. 401/403 delete the set; network errors and 5xx keep it.
   Future<void> _refreshRecoverySetIfDue() async {
-    if (!kAdaptiveConnect3 || _recoveryFetching || paused != null) return;
+    if (!ColituAc3Switch.enabled || _recoveryFetching || paused != null) return;
     _recoveryFetching = true;
     try {
       final now = DateTime.now();
@@ -1176,7 +1192,7 @@ class ColituConnectionController extends ChangeNotifier
             ? null
             : DateTime.fromMillisecondsSinceEpoch(attempt),
         now: now,
-        enabled: kAdaptiveConnect3,
+        enabled: ColituAc3Switch.enabled,
       )) {
         return;
       }
@@ -1259,7 +1275,7 @@ class ColituConnectionController extends ChangeNotifier
       cacheUsable: false,
       set: set,
       now: DateTime.now(),
-      enabled: kAdaptiveConnect3,
+      enabled: ColituAc3Switch.enabled,
     );
     if (decision == ColituRecoveryDecision.expired) {
       debugPrint('Recovery set past recovery_until: deleted');
@@ -1406,7 +1422,7 @@ class ColituConnectionController extends ChangeNotifier
         stalled: _memory.stalledTransports(network, key, DateTime.now()),
         lastGood: lastGood,
         rank: (rest) => [...rest]..sort((a, b) => rankOf(a).compareTo(rankOf(b))),
-        enabled: kAdaptiveConnect3,
+        enabled: ColituAc3Switch.enabled,
       );
       if (hinted != null) {
         startOrder = [for (final c in hinted.order) c.protocolType];
@@ -1420,208 +1436,233 @@ class ColituConnectionController extends ChangeNotifier
     final transports = config.outboundCandidates.length;
     final attempts = transports == 0 ? 1 : transports;
     String? lastProtocol;
-    for (var attempt = 0; attempt < attempts; attempt++) {
-      if (attempt > 0 && DateTime.now().isAfter(deadline)) {
-        debugPrint('Time budget of this server spent');
-        break;
-      }
-      _connectStartedAt = DateTime.now();
-      phase = ColituConnectPhase.probing;
-      _notify();
-      final int configId;
-      try {
-        configId = await _adapter
-            .prepareConnectionConfig(
-              config,
-              server: server,
-              excludeProtocols: excluded,
-              softExcludeProtocols: marks.soft,
-              skipProtocols: tried,
-              preferProtocol: prefer,
-              startOrder: startOrder,
-            )
-            .timeout(_prepareTimeout);
-      } on APIException catch (e) {
-        // Only transports this build cannot read are left untried.
-        if (attempt == 0 || e.code != APIErrorCode.configMissing) rethrow;
-        break;
-      }
-      if (serial != _connectSerial) return superseded;
-      lastProtocol = _adapter.lastChosenProtocol;
-      if (lastProtocol != null) tried.add(lastProtocol);
-      _telemetry.tryingConnect(
-        nodeId: _connectedNodeId,
-        protocol: lastProtocol,
-        // Earlier servers and earlier transports on this one: the first try is
-        // the first round on the first server (a winning spare included).
-        fallbacks: _serverFallbacks + attempt,
-      );
-      transport = lastProtocol;
-      transportLatencyMs = _adapter.lastChosenLatencyMs;
-
-      phase = ColituConnectPhase.starting;
-      _notify();
-      if (!await engine.VpnService().checkPermission()) {
-        throw const APIException(
-          APIErrorCode.vpnPermissionDenied,
-          'VPN permission denied',
-        );
-      }
-      await PreferencesKey().saveVpnStartTimestamp();
-      // The previous tunnel (another server, or the transport tried just
-      // before) must be gone before the new one starts.
-      await _ensureTunnelDown();
-      if (serial != _connectSerial) return superseded;
-      ColituRuBypass.serverCountry = config.serverCountry ?? server.countryCode;
-      _connectedCountry = ColituRuBypass.serverCountry;
-      // One core with the primary and the warm spare (never two cores: the
-      // extension's ~50 MB memory cap).
-      final plan = await _storeSpare(
-        configId: configId,
-        server: server,
-        config: config,
-        protocol: lastProtocol,
-        fetch: spareFetch,
-      );
-      if (serial != _connectSerial) return superseded;
-      _live = _LiveTunnel(configId, server, config, lastProtocol);
-      var started = false;
-      try {
-        await engine.VpnService().startVpn(configId).timeout(_engineStartTimeout);
-        started = await _waitForVpnState(configId, timeout: _engineStateWait);
-      } on TimeoutException {
-        debugPrint('VPN engine start timed out for $lastProtocol');
-      }
-      if (!started) {
-        await Future.delayed(const Duration(milliseconds: 600));
-        final state = AppEventBus.instance.state;
-        started = state.runningId == configId && !state.vpnLoading;
-      }
-      if (serial != _connectSerial) return superseded;
-      // A tunnel the system did not bring up in time is skipped like a
-      // stalled one: the next transport gets its turn instead of the whole
-      // connect failing.
-      engineStalled = !started;
-      if (!started) debugPrint('VPN engine did not confirm $lastProtocol');
-
-      // The tunnel is up. Prove that traffic flows before calling it
-      // connected; with a warm spare both paths are checked at once.
-      var ok = false;
-      VPNServer connectedTo = server;
-      String? connectedProtocol = lastProtocol;
-      if (started) {
-        phase = ColituConnectPhase.verifying;
-        _wasTunnelRunning = true;
-        _notify();
-        final spareCheck = ColituVerifyProxy.currentSpare;
-        if (plan != null && plan.hasSpare && spareCheck != null) {
-          final round = await colituParallelRound(
-            primary: () => _verifyTraffic(serial),
-            spare: () => _verifyTraffic(serial, proxy: spareCheck.directive),
-          );
-          if (serial != _connectSerial) return superseded;
-          final winner = switch (round.winner) {
-            ColituRoundWinner.primary => lastProtocol ?? '?',
-            ColituRoundWinner.spare => _pathLabel(plan.server, plan.protocol, key),
-            ColituRoundWinner.none => 'none',
-          };
-          debugPrint(
-            'parallel round: $lastProtocol vs ${_pathLabel(plan.server, plan.protocol, key)} → winner $winner in ${round.elapsed.inMilliseconds} ms',
-          );
-          if (round.winner == ColituRoundWinner.primary) {
-            ok = true;
-          } else if (round.winner == ColituRoundWinner.spare) {
-            // The primary failed, the spare carries traffic: roles swap with
-            // one core reload, and a new spare is picked.
-            if (lastProtocol != null) {
-              _memory.markStalled(network, key, lastProtocol, DateTime.now());
-              excluded.add(lastProtocol);
-            }
-            final swapped = await _swapRoles(
-              serial,
-              plan: plan,
-              config: config,
-              failed: '$key|$lastProtocol',
-            );
-            if (serial != _connectSerial) return superseded;
-            if (swapped != null) {
-              ok = true;
-              connectedTo = swapped.server;
-              connectedProtocol = swapped.protocol;
-            }
-          } else {
-            // Both failed: that spare is not used again in this connect.
-            _spareAvoid.add('${plan.server}|${plan.protocol}');
-          }
-        } else {
-          ok = await _verifyTraffic(serial);
-          if (serial != _connectSerial) return superseded;
+    // A new credential the node had not confirmed yet: its silence says
+    // nothing about this network (no stall marks), and the same server is
+    // tried again until the node takes it (normally within a second or two).
+    final pending = config.credentialsPending;
+    final settleEnd = DateTime.now().add(
+      _automatic ? _credentialSettleAutomatic : _credentialSettleManual,
+    );
+    final settleUntil = settleEnd.isBefore(deadline) ? settleEnd : deadline;
+    final excludedBefore = {...excluded};
+    while (true) {
+      for (var attempt = 0; attempt < attempts; attempt++) {
+        if (attempt > 0 && DateTime.now().isAfter(deadline)) {
+          debugPrint('Time budget of this server spent');
+          break;
         }
-      }
-      if (ok) {
-        connectedServer = connectedTo;
-        transport = connectedProtocol;
-        _resetRotationStatus();
-        connectedSeconds = 0;
-        verified = true;
-        status = ColituVpnStatus.connected;
-        phase = ColituConnectPhase.idle;
-        notice = null;
-        _stallWatch.startSession(DateTime.now());
-        _spareWatch.reset(DateTime.now());
-        if (!connectedTo.isMultihop) {
-          // The last-good server is remembered from automatic-mode
-          // connections only; a manual pick keeps just its transport.
-          _memory.recordSuccess(
-            network,
-            connectedTo.selectionKey,
-            connectedProtocol,
-            DateTime.now(),
-            goodServer: _automatic,
-          );
-          _saveMemory();
-        }
-        _telemetry.endConnect(
-          ok: true,
-          nodeId: _connectedNodeId,
-          protocol: connectedProtocol,
-        );
-        _recordFeatures(connectedTo);
-        unawaited(_sendTelemetry());
+        _connectStartedAt = DateTime.now();
+        phase = ColituConnectPhase.probing;
         _notify();
-        unawaited(_fetchPublicIp(serial));
-        unawaited(_checkRuDirectNotice());
-        // Starting the tunnel records a previous unclean exit, if any.
-        unawaited(_checkDrops());
-        return (outcome: _Attempt.connected, engineStalled: false);
-      }
-      // The tunnel is up but carries no traffic: this transport stalls on
-      // this network, unless the device itself is offline (then nothing is
-      // marked). Try the next one before giving up.
-      if (lastProtocol != null && started) {
-        if (!await ColituStallWatch.deviceHasNetwork()) {
-          await _resetTunnelState();
-          return (outcome: _Attempt.offline, engineStalled: false);
+        final int configId;
+        try {
+          configId = await _adapter
+              .prepareConnectionConfig(
+                config,
+                server: server,
+                excludeProtocols: excluded,
+                softExcludeProtocols: marks.soft,
+                skipProtocols: tried,
+                preferProtocol: prefer,
+                startOrder: startOrder,
+              )
+              .timeout(_prepareTimeout);
+        } on APIException catch (e) {
+          // Only transports this build cannot read are left untried.
+          if (attempt == 0 || e.code != APIErrorCode.configMissing) rethrow;
+          break;
         }
         if (serial != _connectSerial) return superseded;
-        // A mark from a failing round: 10 min, 6 h once another transport
-        // carries traffic here.
-        _memory.markStalled(network, key, lastProtocol, DateTime.now());
-        _saveMemory();
-        excluded.add(lastProtocol);
-        debugPrint('Transport $lastProtocol stalled; excluding it');
-      }
-      final untried = config.outboundCandidates
-          .where((c) => !tried.contains(c.protocolType))
-          .length;
-      if (attempt + 1 < attempts && untried > 0) {
-        phase = ColituConnectPhase.switching;
-        notice = ColituLoc.I['home.switchingTransport'];
+        lastProtocol = _adapter.lastChosenProtocol;
+        if (lastProtocol != null) tried.add(lastProtocol);
+        _telemetry.tryingConnect(
+          nodeId: _connectedNodeId,
+          protocol: lastProtocol,
+          // Earlier servers and earlier transports on this one: the first try is
+          // the first round on the first server (a winning spare included).
+          fallbacks: _serverFallbacks + attempt,
+        );
+        transport = lastProtocol;
+        transportLatencyMs = _adapter.lastChosenLatencyMs;
+
+        phase = ColituConnectPhase.starting;
         _notify();
+        if (!await engine.VpnService().checkPermission()) {
+          throw const APIException(
+            APIErrorCode.vpnPermissionDenied,
+            'VPN permission denied',
+          );
+        }
+        await PreferencesKey().saveVpnStartTimestamp();
+        // The previous tunnel (another server, or the transport tried just
+        // before) must be gone before the new one starts.
+        await _ensureTunnelDown();
+        if (serial != _connectSerial) return superseded;
+        ColituRuBypass.serverCountry = config.serverCountry ?? server.countryCode;
+        _connectedCountry = ColituRuBypass.serverCountry;
+        // One core with the primary and the warm spare (never two cores: the
+        // extension's ~50 MB memory cap).
+        final plan = await _storeSpare(
+          configId: configId,
+          server: server,
+          config: config,
+          protocol: lastProtocol,
+          fetch: spareFetch,
+        );
+        if (serial != _connectSerial) return superseded;
+        _live = _LiveTunnel(configId, server, config, lastProtocol);
+        var started = false;
+        try {
+          await engine.VpnService().startVpn(configId).timeout(_engineStartTimeout);
+          started = await _waitForVpnState(configId, timeout: _engineStateWait);
+        } on TimeoutException {
+          debugPrint('VPN engine start timed out for $lastProtocol');
+        }
+        if (!started) {
+          await Future.delayed(const Duration(milliseconds: 600));
+          final state = AppEventBus.instance.state;
+          started = state.runningId == configId && !state.vpnLoading;
+        }
+        if (serial != _connectSerial) return superseded;
+        // A tunnel the system did not bring up in time is skipped like a
+        // stalled one: the next transport gets its turn instead of the whole
+        // connect failing.
+        engineStalled = !started;
+        if (!started) debugPrint('VPN engine did not confirm $lastProtocol');
+
+        // The tunnel is up. Prove that traffic flows before calling it
+        // connected; with a warm spare both paths are checked at once.
+        var ok = false;
+        VPNServer connectedTo = server;
+        String? connectedProtocol = lastProtocol;
+        if (started) {
+          phase = ColituConnectPhase.verifying;
+          _wasTunnelRunning = true;
+          _notify();
+          final spareCheck = ColituVerifyProxy.currentSpare;
+          if (plan != null && plan.hasSpare && spareCheck != null) {
+            final round = await colituParallelRound(
+              primary: () => _verifyTraffic(serial),
+              spare: () => _verifyTraffic(serial, proxy: spareCheck.directive),
+            );
+            if (serial != _connectSerial) return superseded;
+            final winner = switch (round.winner) {
+              ColituRoundWinner.primary => lastProtocol ?? '?',
+              ColituRoundWinner.spare => _pathLabel(plan.server, plan.protocol, key),
+              ColituRoundWinner.none => 'none',
+            };
+            debugPrint(
+              'parallel round: $lastProtocol vs ${_pathLabel(plan.server, plan.protocol, key)} → winner $winner in ${round.elapsed.inMilliseconds} ms',
+            );
+            if (round.winner == ColituRoundWinner.primary) {
+              ok = true;
+            } else if (round.winner == ColituRoundWinner.spare) {
+              // The primary failed, the spare carries traffic: roles swap with
+              // one core reload, and a new spare is picked.
+              if (lastProtocol != null) {
+                if (!pending) {
+                  _memory.markStalled(network, key, lastProtocol, DateTime.now());
+                }
+                excluded.add(lastProtocol);
+              }
+              final swapped = await _swapRoles(
+                serial,
+                plan: plan,
+                config: config,
+                failed: '$key|$lastProtocol',
+              );
+              if (serial != _connectSerial) return superseded;
+              if (swapped != null) {
+                ok = true;
+                connectedTo = swapped.server;
+                connectedProtocol = swapped.protocol;
+              }
+            } else {
+              // Both failed: that spare is not used again in this connect.
+              _spareAvoid.add('${plan.server}|${plan.protocol}');
+            }
+          } else {
+            ok = await _verifyTraffic(serial);
+            if (serial != _connectSerial) return superseded;
+          }
+        }
+        if (ok) {
+          connectedServer = connectedTo;
+          transport = connectedProtocol;
+          _resetRotationStatus();
+          connectedSeconds = 0;
+          verified = true;
+          status = ColituVpnStatus.connected;
+          phase = ColituConnectPhase.idle;
+          notice = null;
+          _stallWatch.startSession(DateTime.now());
+          _spareWatch.reset(DateTime.now());
+          if (!connectedTo.isMultihop) {
+            // The last-good server is remembered from automatic-mode
+            // connections only; a manual pick keeps just its transport.
+            _memory.recordSuccess(
+              network,
+              connectedTo.selectionKey,
+              connectedProtocol,
+              DateTime.now(),
+              goodServer: _automatic,
+            );
+            _saveMemory();
+          }
+          _telemetry.endConnect(
+            ok: true,
+            nodeId: _connectedNodeId,
+            protocol: connectedProtocol,
+          );
+          _recordFeatures(connectedTo);
+          unawaited(_sendTelemetry());
+          _notify();
+          unawaited(_fetchPublicIp(serial));
+          unawaited(_checkRuDirectNotice());
+          // Starting the tunnel records a previous unclean exit, if any.
+          unawaited(_checkDrops());
+          return (outcome: _Attempt.connected, engineStalled: false);
+        }
+        // The tunnel is up but carries no traffic: this transport stalls on
+        // this network, unless the device itself is offline (then nothing is
+        // marked). Try the next one before giving up.
+        if (lastProtocol != null && started) {
+          if (!await ColituStallWatch.deviceHasNetwork()) {
+            await _resetTunnelState();
+            return (outcome: _Attempt.offline, engineStalled: false);
+          }
+          if (serial != _connectSerial) return superseded;
+          // A mark from a failing round: 10 min, 6 h once another transport
+          // carries traffic here.
+          if (!pending) {
+            _memory.markStalled(network, key, lastProtocol, DateTime.now());
+            _saveMemory();
+          }
+          excluded.add(lastProtocol);
+          debugPrint('Transport $lastProtocol stalled; excluding it');
+        }
+        final untried = config.outboundCandidates
+            .where((c) => !tried.contains(c.protocolType))
+            .length;
+        if (attempt + 1 < attempts && untried > 0) {
+          phase = ColituConnectPhase.switching;
+          notice = ColituLoc.I['home.switchingTransport'];
+          _notify();
+        }
+        await _resetTunnelState();
+        if (serial != _connectSerial) return superseded;
+        if (untried == 0 || lastProtocol == null) break;
       }
-      await _resetTunnelState();
+      if (!pending || DateTime.now().add(_credentialRetry).isAfter(settleUntil)) {
+        break;
+      }
+      debugPrint('new credentials not on the server yet; trying it again');
+      await Future<void>.delayed(_credentialRetry);
       if (serial != _connectSerial) return superseded;
-      if (untried == 0 || lastProtocol == null) break;
+      tried.clear();
+      excluded
+        ..clear()
+        ..addAll(excludedBefore);
     }
     return (outcome: _Attempt.failed, engineStalled: engineStalled);
   }

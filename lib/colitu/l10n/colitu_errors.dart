@@ -83,6 +83,16 @@ String colituErrorMessage(Object error, {bool signingIn = false}) {
       case 'LINK_EXPIRED':
       case 'LINK_DENIED':
         return loc['link.invalid'];
+      case 'REAUTH_REQUIRED':
+        return loc['link.err.reauthRequired'];
+      case 'REAUTH_INVALID_PASSWORD':
+        return loc['link.err.password'];
+      case 'REAUTH_INVALID_CODE':
+        return loc['link.err.code'];
+      case 'REAUTH_RATE_LIMITED':
+        return loc['link.err.rate'];
+      case 'MFA_UNAVAILABLE':
+        return loc['mfa.err.unavailable'];
       case 'EMAIL_DELIVERY_UNAVAILABLE':
         return loc['verify.err.mail'];
       case 'SUPPORT_FILE_TOO_LARGE':

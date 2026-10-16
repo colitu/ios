@@ -122,6 +122,17 @@ class ColituTelemetry {
     if (fallbacks != null) _fallbacks = fallbacks;
   }
 
+  /// The attempt moves on to the server [nodeId] (null: a multihop route,
+  /// which is no node). The transport of an earlier server is forgotten, so a
+  /// failure before any transport of this one was chosen names the server it
+  /// was on and no protocol, never a mix of two.
+  void tryingServer({String? nodeId, int? fallbacks}) {
+    if (_attemptAt == null) return;
+    _node = nodeId;
+    _protocol = null;
+    if (fallbacks != null) _fallbacks = fallbacks;
+  }
+
   /// The attempt settled. A success names the node and protocol that carry
   /// traffic; a failure gives the [reason] (see
   /// [ColituAcEvents.reasonOfError]). No-op without an open attempt.

@@ -1,3 +1,4 @@
+import 'package:colitu_vpn/colitu/config/adaptive_connect3.dart';
 import 'dart:async';
 
 import 'package:drift/drift.dart';
@@ -139,6 +140,8 @@ class ColituVPNConfigAdapter {
     await _deletePreviousRuntimeConfig();
     await PreferencesKey().clearColituSelectedServerId();
     await PreferencesKey().clearColituWarmSpareChoice();
+    await PreferencesKey().clearColituAc3Remote();
+    ColituAc3Switch.setRemote(false);
   }
 
   /// The core outbound for a panel outbound (the warm spare); throws

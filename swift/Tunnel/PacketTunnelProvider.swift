@@ -57,6 +57,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     private var socksPass = ""
     private var sleptAt: Date?
     private var lastWakeAt: Date?
+    /// When a wake-up last restarted the core (see `restartCoreAfterWake`).
+    private var lastWakeRestartAt: Date?
     /// The proxy server's name and the IPv4 address it had when the tunnel
     /// started (also the address excluded from the tunnel's routes).
     private var pinnedServer: PinnedServer?
@@ -1833,6 +1835,19 @@ private extension PacketTunnelProvider {
             stabilityLog("quic_reset", reason: "after_sleep", metadata: ["sleptSec": sleptSeconds])
         }
         wakeRecoveryTask?.cancel()
+        wakeRecoveryTask = nil
+        // The QUIC reset does nothing for TCP transports (XHTTP over HTTP/2,
+        // raw, Trojan): their pooled connection to the server outlives the
+        // sleep here while the server or a NAT has dropped it, and every
+        // request, the core's DoH lookups too, waited on it until TCP gave
+        // up, minutes later (one wake at 05:28 was only restarted at 05:32;
+        // stuck DoH requests piled up to 1284 goroutines and iOS killed the
+        // extension for memory). Restart the core at once.
+        if sleptSeconds >= Self.tcpRestartAfterSleepSeconds, !coreUsesQuicTransport,
+           coreRunning, !restartingCore, !userInitiatedStop,
+           restartCoreAfterWake(reason: .appWakeupLongSleep, metadata: ["sleptSec": sleptSeconds]) {
+            return
+        }
         wakeRecoveryTask = Task { [weak self] in
             // Let the radio come back before judging the path.
             try? await Task.sleep(nanoseconds: UInt64(PacketTunnelProvider.wakeSettleSeconds * 1_000_000_000))
@@ -1842,23 +1857,93 @@ private extension PacketTunnelProvider {
                 self.stabilityLog("health_check_skipped", reason: "probe_just_succeeded_after_wake")
                 return
             }
-            let result = await self.confirmTunnelHealth(reason: StabilityReconnectReason.appWakeupHealthFailed.rawValue)
+            let result = await self.wakeHealthCheck()
             guard !Task.isCancelled, self.tunnelShouldRun, !self.userInitiatedStop else { return }
             if result == .success {
                 self.handleSuccessfulProbe()
             } else if result == .failed {
-                self.restartCoreForNewSituation(reason: .appWakeupHealthFailed)
+                // The first check after a wake failed: the session did not
+                // survive the sleep. No second, slower check (it kept a dead
+                // tunnel for 7 s more, long enough for the next sleep to
+                // cancel the restart altogether).
+                self.restartCoreAfterWake(reason: .appWakeupHealthFailed, metadata: ["sleptSec": sleptSeconds])
             }
         }
     }
 
+    /// The health check of a wake: both probe hosts at once, each with
+    /// `wakeProbeTimeout`. One answer is enough; when both fail the tunnel is
+    /// broken, unless apps kept receiving data meanwhile.
+    func wakeHealthCheck() async -> HealthCheckResult {
+        let reason = StabilityReconnectReason.appWakeupHealthFailed.rawValue
+        let downBefore = traffic.snapshot().down
+        let targets = probeTargets()
+        async let firstCheck = runHealthCheck(reason: reason, target: targets.first, timeout: Self.wakeProbeTimeout)
+        async let secondCheck = runHealthCheck(reason: reason, target: targets.second, timeout: Self.wakeProbeTimeout)
+        let (first, second) = await (firstCheck, secondCheck)
+        if first == .success || second == .success {
+            if first == .failed, targets.first.isServerProbe {
+                nodeProbeMisses += 1
+                if nodeProbeMisses == Self.nodeProbeMissLimit {
+                    stabilityLog("node_probe_missing", reason: reason)
+                }
+            }
+            return .success
+        }
+        if first == .skipped || second == .skipped { return .skipped }
+        let received = traffic.snapshot().down &- downBefore
+        if received >= 64 << 10 {
+            stabilityLog("health_check_skipped", reason: "probe_failed_traffic_flowing", metadata: ["receivedKB": Int(received >> 10)])
+            return .skipped
+        }
+        return .failed
+    }
+
+    /// Restarts the core for a wake-up at once: no backoff of earlier
+    /// attempts and outside the general restart budget (a wake is a new
+    /// situation, and a budget used up by earlier wakes left the tunnel dead
+    /// until the keepalive tried again). Wake restarts keep their own guard
+    /// against a restart storm: at most one per `wakeRestartMinInterval`.
+    /// False when the guard held the restart back.
+    @discardableResult
+    func restartCoreAfterWake(reason: StabilityReconnectReason, metadata: [String: Any] = [:]) -> Bool {
+        let now = Date()
+        if let last = lastWakeRestartAt, now.timeIntervalSince(last) < Self.wakeRestartMinInterval {
+            var details = metadata
+            details["lastWakeRestartAgoSec"] = Int(now.timeIntervalSince(last))
+            stabilityLog("reconnect_suppressed", reason: reason.rawValue, metadata: details)
+            return false
+        }
+        // A restart already running decides on its own.
+        guard reconnectTask == nil else { return true }
+        lastWakeRestartAt = now
+        reconnectAttempt = 0
+        reconnectStartedUptime = nil
+        stabilityLog("wake_restart", reason: reason.rawValue, metadata: metadata)
+        scheduleReconnect(reason: reason, healthCheckFirst: false, countsAgainstBudget: false)
+        return true
+    }
+
+    /// Hysteria2 (QUIC) is handled by the QUIC reset after a sleep; every
+    /// other transport runs over TCP.
+    var coreUsesQuicTransport: Bool {
+        (currentProfile.proto ?? "").lowercased().contains("hysteria")
+    }
+
     /// Seconds to wait after a wake before probing.
     static let wakeSettleSeconds: Double = 1.5
+    /// Timeout of each probe of the wake health check.
+    static let wakeProbeTimeout: TimeInterval = 3
     /// A sleep at least this long drops the cached QUIC session. The
     /// server's idle timeout is 30 s and the last keepalive went out at most
     /// 10 s before the sleep, so a shorter sleep leaves the session alive:
     /// resetting it then only cut every open connection on each unlock.
     static let quicResetAfterSleepSeconds = 20
+    /// A sleep at least this long restarts the core of a TCP transport at
+    /// wake (same reasoning as `quicResetAfterSleepSeconds`).
+    static let tcpRestartAfterSleepSeconds = 20
+    /// Wake restarts are at least this far apart.
+    static let wakeRestartMinInterval: TimeInterval = 30
     /// The keepalive leaves probing to the wake handler for this long after
     /// a wake.
     static let wakeProbeGraceSeconds: TimeInterval = 3
@@ -2061,7 +2146,7 @@ private extension PacketTunnelProvider {
         }
     }
 
-    func scheduleReconnect(reason: StabilityReconnectReason, healthCheckFirst: Bool) {
+    func scheduleReconnect(reason: StabilityReconnectReason, healthCheckFirst: Bool, countsAgainstBudget: Bool = true) {
         guard tunnelShouldRun, !userInitiatedStop else { return }
         reconnectLock.lock()
         defer { reconnectLock.unlock() }
@@ -2074,7 +2159,7 @@ private extension PacketTunnelProvider {
             stabilityLog("reconnect_scheduled", reason: "already_running")
             return
         }
-        if reason != .coreProcessFailed {
+        if reason != .coreProcessFailed, countsAgainstBudget {
             let now = Date()
             automaticRestarts.removeAll { now.timeIntervalSince($0) > Self.restartBudgetWindow }
             guard automaticRestarts.count < Self.restartBudget else {
@@ -2346,7 +2431,8 @@ private extension PacketTunnelProvider {
 
     func shouldTreatValidationFailureAsTransient(reason: StabilityReconnectReason) -> Bool {
         if lowPowerMode { return true }
-        if reason == .pathChanged || reason == .networkRestored || reason == .appWakeupHealthFailed {
+        if reason == .pathChanged || reason == .networkRestored || reason == .appWakeupHealthFailed
+            || reason == .appWakeupLongSleep {
             return true
         }
         guard let changedAt = lastPathChangeAt else { return false }
@@ -2800,6 +2886,7 @@ private enum StabilityReconnectReason: String {
     case coreProcessFailed = "core_process_failed"
     case serverReset = "server_reset"
     case appWakeupHealthFailed = "app_wakeup_health_failed"
+    case appWakeupLongSleep = "app_wakeup_long_sleep"
     case memoryPressure = "memory_pressure"
     case appReload = "app_reload"
 }

@@ -91,7 +91,7 @@ XrayDnsServer _$XrayDnsServerFromJson(Map<String, dynamic> json) =>
       json['tag'] as String?,
       json['disableCache'] as bool?,
       json['finalQuery'] as bool?,
-    );
+    )..timeoutMs = (json['timeoutMs'] as num?)?.toInt();
 
 Map<String, dynamic> _$XrayDnsServerToJson(XrayDnsServer instance) =>
     <String, dynamic>{
@@ -105,6 +105,7 @@ Map<String, dynamic> _$XrayDnsServerToJson(XrayDnsServer instance) =>
       'tag': ?instance.tag,
       'disableCache': ?instance.disableCache,
       'finalQuery': ?instance.finalQuery,
+      'timeoutMs': ?instance.timeoutMs,
     };
 
 XrayRouting _$XrayRoutingFromJson(Map<String, dynamic> json) => XrayRouting(

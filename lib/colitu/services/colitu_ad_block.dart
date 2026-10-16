@@ -115,8 +115,24 @@ class ColituAdBlock {
     return (servers ?? dohServers).any((url) => Uri.parse(url).host == value);
   }
 
-  /// Replaces the general resolvers of [state] with [dohServers]. Resolvers
-  /// that only answer for listed domains (local/direct ones) stay as they are.
+  /// Per-query timeout of an ad-blocking resolver. Xray waits 4 s by
+  /// default; a DoH request stuck on a stale HTTP/2 connection after a wake
+  /// held every lookup behind it that long (168 timeouts in 50 minutes in
+  /// one diagnostic), before the next server was even asked.
+  static const dohTimeoutMs = 3000;
+
+  /// Plain resolver asked when every ad-blocking one failed. It goes through
+  /// the tunnel like the others (the DNS query rule sends the core's lookups
+  /// to the proxy), as a new TCP connection per query, so it does not share
+  /// a stalled DoH connection. Ads are not blocked for such a lookup, but
+  /// the page loads.
+  static const fallbackResolver = 'tcp://1.1.1.1';
+
+  /// Puts [dohServers] in front of the general resolvers of [state].
+  /// Resolvers that only answer for listed domains (local/direct ones) stay
+  /// as they are. The app's own plain resolver (or [fallbackResolver] when
+  /// it was a DoH one) stays last as a fallback: Xray asks the servers in
+  /// order and moves on after an error or a timeout.
   static void applyTo(XraySettingState state, {List<String>? servers}) {
     final urls = servers ?? dohServers;
     if (urls.isEmpty) return;
@@ -130,8 +146,24 @@ class ColituAdBlock {
       server.address = url;
       server.tag = template.tag;
       server.queryStrategy = template.queryStrategy;
+      server.timeoutMs = dohTimeoutMs;
       return server;
     }).toList();
-    state.dns.servers = [...resolvers, ...scoped];
+    final plain = template.address.trim();
+    final fallback = DnsServerState()
+      ..address = _plainResolver(plain) ? plain : fallbackResolver
+      ..tag = template.tag
+      ..queryStrategy = template.queryStrategy;
+    state.dns.servers = [...resolvers, fallback, ...scoped];
+  }
+
+  /// A plain DNS server by address (`1.1.1.1`, `tcp://1.1.1.1`): no DoH
+  /// connection to share, and no system resolver (`localhost`) outside the
+  /// tunnel.
+  static bool _plainResolver(String address) {
+    final host = address.startsWith('tcp://')
+        ? address.substring('tcp://'.length).split(':').first
+        : address;
+    return InternetAddress.tryParse(host) != null;
   }
 }

@@ -115,6 +115,43 @@ void main() {
       );
     });
 
+    test('a failure may come without a protocol; a success may not', () {
+      expect(
+        ColituAcEvents.connect(nodeId: _n1, protocol: null, ok: false, code: 'timeout', ms: 9000, firstTry: false, auto: true),
+        {
+          'kind': 'connect',
+          'node_id': _n1,
+          'outcome': 'fail',
+          'reason': 'timeout',
+          'ms': 9000,
+          'first_try': false,
+          'mode': 'auto',
+        },
+      );
+      expect(
+        ColituAcEvents.connect(nodeId: _n1, protocol: null, ok: true, ms: 1, firstTry: true, auto: true),
+        isNull,
+      );
+      expect(
+        ColituAcEvents.recovery(nodeId: _n1, protocol: null, ok: false, code: 'blocked', ms: 5, spare: false),
+        {
+          'kind': 'recovery',
+          'node_id': _n1,
+          'outcome': 'fail',
+          'reason': 'blocked',
+          'ms': 5,
+          'spare': false,
+        },
+      );
+      expect(
+        ColituAcEvents.drop(nodeId: _n1, protocol: null, code: 'no_network', minutes: 3),
+        {'kind': 'drop', 'node_id': _n1, 'reason': 'no_network', 'minutes': 3},
+      );
+      // Still nothing without a node.
+      expect(ColituAcEvents.drop(nodeId: null, protocol: 'trojan', minutes: 3), isNull);
+      expect(ColituAcEvents.recovery(nodeId: null, protocol: 'trojan', ok: false, ms: 5, spare: false), isNull);
+    });
+
     test('recovery, switch, drop, probe', () {
       expect(
         ColituAcEvents.recovery(
@@ -412,6 +449,56 @@ void main() {
       expect(e['first_try'], isFalse);
       expect(e['mode'], 'manual');
       expect(e['node_id'], _n2);
+    });
+
+    test('a failure before any transport was chosen still names the server', () async {
+      final id = t.beginConnect(auto: true);
+      await metrics.idle();
+      t.tryingServer(nodeId: _n1, fallbacks: 0);
+      t.endConnect(ok: false, reason: 'timeout', id: id);
+      final e = (await queued()).single;
+      expect(e['outcome'], 'fail');
+      expect(e['node_id'], _n1);
+      expect(e['reason'], 'timeout');
+      expect(e['first_try'], isTrue);
+      expect(e.containsKey('protocol'), isFalse);
+    });
+
+    test('moving to the next server forgets the transport of the earlier one', () async {
+      final id = t.beginConnect(auto: true);
+      await metrics.idle();
+      t.tryingServer(nodeId: _n1, fallbacks: 0);
+      t.tryingConnect(nodeId: _n1, protocol: 'trojan', fallbacks: 0);
+      t.tryingServer(nodeId: _n2, fallbacks: 1);
+      t.endConnect(ok: false, reason: 'blocked', id: id);
+      final e = (await queued()).single;
+      expect(e['node_id'], _n2);
+      expect(e.containsKey('protocol'), isFalse);
+      expect(e['first_try'], isFalse);
+    });
+
+    test('a multihop route as the server sends no event even after a node', () async {
+      final id = t.beginConnect(auto: true);
+      await metrics.idle();
+      t.tryingServer(nodeId: _n1, fallbacks: 0);
+      t.tryingServer(nodeId: null, fallbacks: 1);
+      t.endConnect(ok: false, reason: 'timeout', id: id);
+      expect(await queued(), isEmpty);
+    });
+
+    test('a failed recovery without a known protocol still sends its recovery event', () async {
+      t.beginRecovery(
+        failedAt: now.subtract(const Duration(seconds: 30)),
+        nodeId: _n1,
+        spare: false,
+      );
+      t.endRecovery(ok: false, reason: 'no_network');
+      final list = await queued();
+      expect(list.single['kind'], 'recovery');
+      expect(list.single['outcome'], 'fail');
+      expect(list.single['reason'], 'no_network');
+      expect(list.single['ms'], 30000);
+      expect(list.single.containsKey('protocol'), isFalse);
     });
 
     test('an abandoned attempt is taken back, a stale id cannot close a newer one', () async {

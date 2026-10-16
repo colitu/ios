@@ -114,7 +114,8 @@ class AppSession {
 
   Future<LinkRequest> lookupLink(String code) => _authService.lookupLink(code);
 
-  Future<void> decideLink(String code, {required bool approve}) => _authService.decideLink(code, approve: approve);
+  Future<void> decideLink(String code, {required bool approve, String? reauth, String? proof}) =>
+      _authService.decideLink(code, approve: approve, reauth: reauth, proof: proof);
 
   /// The address the verification code went to, while one is pending.
   Future<String?> pendingVerificationEmail() => _tokenStore.readPendingVerificationEmail();

@@ -44,6 +44,11 @@ class ColituPing {
   /// A ping counts for the ranking this long, on the network it was taken on.
   static const freshFor = Duration(minutes: 10);
 
+  /// A successful ping still orders the servers this long on its network
+  /// (after a network change or a wake-up the panel order can put a far
+  /// server first). A failed ping is only believed while fresh.
+  static const usableFor = Duration(hours: 6);
+
   final int? ms;
   final DateTime at;
   final String network;
@@ -55,6 +60,13 @@ class ColituPing {
     final age = now.difference(at);
     // A clock that went backwards makes the age negative: not fresh.
     return !age.isNegative && age < freshFor;
+  }
+
+  /// A successful ping that may still order the servers ([usableFor]).
+  bool isUsable(String currentNetwork, DateTime now) {
+    if (ms == null || network != currentNetwork) return false;
+    final age = now.difference(at);
+    return !age.isNegative && age < usableFor;
   }
 
   Map<String, dynamic> toJson() => {
@@ -337,7 +349,12 @@ class ColituAdaptiveMemory {
       _put(_Entry(_Kind.penalized, network, server, '', now));
 
   bool isPenalized(String network, String server, DateTime now) =>
-      _find(_Kind.penalized, network, server: server, now: now) != null;
+      penalizedAt(network, server, now) != null;
+
+  /// When [server] was penalized on [network]; null when it is not (the
+  /// ranking rotates penalized servers, the oldest penalty first).
+  DateTime? penalizedAt(String network, String server, DateTime now) =>
+      _find(_Kind.penalized, network, server: server, now: now)?.at;
 
   /// Drops expired entries and keeps at most [cap].
   void prune(DateTime now) {
@@ -552,7 +569,8 @@ class ColituNetworkHints {
 ) {
   final all = offered.toSet();
   final marked = marks.intersection(all);
-  if (marked.isNotEmpty && all.length - marked.length <= 1) {
+  // A single offered transport: its mark counts (canonical: at least two).
+  if (marked.isNotEmpty && all.length >= 2 && all.length - marked.length <= 1) {
     return (hard: <String>{}, soft: marked);
   }
   return (hard: marked, soft: <String>{});
@@ -563,7 +581,9 @@ class ColituNetworkHints {
 /// A manual choice still connects there.
 const kAutoExcludedCountries = <String>{'RU'};
 
+/// A CSL alpha test node is excluded as well: manual choice only.
 bool autoExcluded(VPNServer server) =>
+    server.alpha ||
     kAutoExcludedCountries.contains(server.countryCode.trim().toUpperCase());
 
 /// Client countries where a server in the client's own country cannot open
@@ -588,16 +608,20 @@ const kMemoryBeatenMs = 60;
 /// order (best-first for this user); multihop routes, servers that cannot be
 /// selected and those in [kAutoExcludedCountries] are left out.
 ///
-/// 1. penalized on this network: last
+/// The same rules on every platform (shared test vectors, colitu-csl
+/// engine/testdata/ac-vectors/ranking.json):
+///
+/// 1. penalized on this network: last, the oldest penalty first
 /// 2. fresh failed ping: after everything else but the penalized
 /// 3. in the user's own country ([clientCountry]): after the foreign ones,
 ///    only when the client is in one of [kHomePushbackCountries]
 /// 4. the last-good server on this network (remembered from automatic-mode
-///    connections only): first, unless its fresh ping is known and a fresh
-///    candidate of the same standing (1-3) is at least
+///    connections only): first, unless its ping is known and a candidate of
+///    the same standing (1-3) is at least
 ///    [kMemoryBeatenFraction] and [kMemoryBeatenMs] ms faster
-/// 5. fresh successful pings, fastest first
-/// 6. no fresh ping: panel order, after the pinged ones
+/// 5. successful pings (fresh, or up to 6 h old on this network), fastest
+///    first
+/// 6. no usable ping: panel order, after the pinged ones
 ///
 /// The "Recommended" entry and the "Fastest server" connect target are both
 /// the first element, so the screen never disagrees with what connect does.
@@ -612,15 +636,17 @@ List<VPNServer> rankServers(
   final home = (clientCountry ?? '').trim().toUpperCase();
   final pushHome = kHomePushbackCountries.contains(home);
   final lastGood = memory.lastGoodServer(network, now);
-  final rows = <({VPNServer server, int bucket, int? ms, int index})>[];
+  final rows =
+      <({VPNServer server, int bucket, int? ms, int index, int penalty})>[];
   var index = 0;
   for (final server in servers) {
     if (server.isMultihop || !server.isSelectable || autoExcluded(server)) continue;
     final key = server.selectionKey;
     final ping = pings[key];
     final fresh = ping != null && ping.isFresh(network, now) ? ping : null;
+    final penalizedAt = memory.penalizedAt(network, key, now);
     final int bucket;
-    if (memory.isPenalized(network, key, now)) {
+    if (penalizedAt != null) {
       bucket = 3;
     } else if (fresh != null && fresh.failed) {
       bucket = 2;
@@ -629,7 +655,13 @@ List<VPNServer> rankServers(
     } else {
       bucket = 0;
     }
-    rows.add((server: server, bucket: bucket, ms: fresh?.ms, index: index++));
+    rows.add((
+      server: server,
+      bucket: bucket,
+      ms: ping != null && ping.isUsable(network, now) ? ping.ms : null,
+      index: index++,
+      penalty: penalizedAt?.millisecondsSinceEpoch ?? 0,
+    ));
   }
   // The remembered server steps aside for a clearly faster one of the same
   // standing.
@@ -648,10 +680,14 @@ List<VPNServer> rankServers(
             rememberedMs - ms >= kMemoryBeatenMs &&
             rememberedMs - ms >= rememberedMs * kMemoryBeatenFraction;
       });
-  bool isLast(({VPNServer server, int bucket, int? ms, int index}) row) =>
+  bool isLast(
+    ({VPNServer server, int bucket, int? ms, int index, int penalty}) row,
+  ) =>
       !memoryBeaten && lastGood != null && row.server.selectionKey == lastGood;
   rows.sort((a, b) {
     if (a.bucket != b.bucket) return a.bucket.compareTo(b.bucket);
+    // Penalized servers rotate: the oldest penalty first.
+    if (a.penalty != b.penalty) return a.penalty.compareTo(b.penalty);
     final aLast = isLast(a);
     final bLast = isLast(b);
     if (aLast != bLast) return aLast ? -1 : 1;

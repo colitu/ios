@@ -148,11 +148,14 @@ abstract final class ColituAcEvents {
   }) {
     final n = _node(nodeId);
     final p = _protocol(protocol);
-    if (n == null || p == null) return null;
+    // A failure may come before any transport was chosen (the config call
+    // timed out, the device was offline): the panel takes it without one.
+    // A success always names the transport that carries traffic.
+    if (n == null || (ok && p == null)) return null;
     return {
       'kind': 'connect',
       'node_id': n,
-      'protocol': p,
+      'protocol': ?p,
       'outcome': _outcome(ok),
       if (!ok) 'reason': reasonOf(code),
       'ms': _clamp(ms),
@@ -172,13 +175,14 @@ abstract final class ColituAcEvents {
     required bool spare,
   }) {
     final n = _node(nodeId);
+    if (n == null) return null;
+    // The transport that failed may be unknown (a drop seen without it).
     final p = _protocol(protocol);
-    if (n == null || p == null) return null;
     final to = _protocol(toProtocol);
     return {
       'kind': 'recovery',
       'node_id': n,
-      'protocol': p,
+      'protocol': ?p,
       'to_protocol': ?to,
       'outcome': _outcome(ok),
       if (!ok) 'reason': reasonOf(code),
@@ -217,12 +221,12 @@ abstract final class ColituAcEvents {
     required int minutes,
   }) {
     final n = _node(nodeId);
+    if (n == null) return null;
     final p = _protocol(protocol);
-    if (n == null || p == null) return null;
     return {
       'kind': 'drop',
       'node_id': n,
-      'protocol': p,
+      'protocol': ?p,
       'reason': reasonOf(code),
       'minutes': minutes < 0 ? 0 : (minutes > 100000 ? 100000 : minutes),
     };

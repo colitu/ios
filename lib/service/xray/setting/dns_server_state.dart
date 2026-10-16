@@ -16,6 +16,9 @@ class DnsServerState {
   var disableCache = false;
   var finalQuery = false;
 
+  /// Per-query timeout in milliseconds; 0 keeps Xray's default (4 s).
+  var timeoutMs = 0;
+
   void removeWhitespace() {
     address = address.removeWhitespace;
     port = port.removeWhitespace;
@@ -59,6 +62,9 @@ class DnsServerState {
     if (server.finalQuery != null) {
       finalQuery = server.finalQuery!;
     }
+    if (server.timeoutMs != null && server.timeoutMs! > 0) {
+      timeoutMs = server.timeoutMs!;
+    }
   }
 
   XrayDnsServer get xrayJson {
@@ -90,6 +96,9 @@ class DnsServerState {
     }
     if (finalQuery) {
       server.finalQuery = finalQuery;
+    }
+    if (timeoutMs > 0) {
+      server.timeoutMs = timeoutMs;
     }
     return server;
   }

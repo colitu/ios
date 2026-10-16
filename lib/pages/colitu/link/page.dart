@@ -22,6 +22,8 @@ class ColituLinkScannerPage extends StatefulWidget {
 class _ColituLinkScannerPageState extends State<ColituLinkScannerPage> {
   final _scanner = MobileScannerController(formats: const [BarcodeFormat.qrCode]);
   final _typed = TextEditingController();
+  // The password, or the 2FA / recovery code, the panel asks for before approving.
+  final _proof = TextEditingController();
   var _typing = false;
   var _busy = false;
   var _scanning = true;
@@ -32,6 +34,7 @@ class _ColituLinkScannerPageState extends State<ColituLinkScannerPage> {
   void dispose() {
     _scanner.dispose();
     _typed.dispose();
+    _proof.dispose();
     super.dispose();
   }
 
@@ -53,6 +56,7 @@ class _ColituLinkScannerPageState extends State<ColituLinkScannerPage> {
     try {
       final request = await AppSession.instance.lookupLink(code);
       if (!mounted) return;
+      _proof.clear();
       setState(() => _request = request);
       await _scanner.stop();
     } catch (error) {
@@ -70,12 +74,13 @@ class _ColituLinkScannerPageState extends State<ColituLinkScannerPage> {
   Future<void> _decide(bool approve) async {
     final request = _request;
     if (request == null || _busy) return;
+    if (approve && request.reauth != null && _proof.text.trim().isEmpty) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      await AppSession.instance.decideLink(request.code, approve: approve);
+      await AppSession.instance.decideLink(request.code, approve: approve, reauth: request.reauth, proof: _proof.text);
       if (mounted) Navigator.of(context).pop(approve);
     } catch (error) {
       if (mounted) setState(() => _error = _friendly(error));
@@ -270,9 +275,34 @@ class _ColituLinkScannerPageState extends State<ColituLinkScannerPage> {
           Text(loc['link.confirmTitle'], style: ColituText.h2),
           const SizedBox(height: 6),
           Text(loc.format('link.confirmBody', {'email': widget.email}), style: ColituText.muted),
+          if (request.countryMismatch && request.country != null && request.approverCountry != null) ...[
+            const SizedBox(height: 12),
+            ColituNotice(loc.format('link.mismatch', {'from': request.country, 'here': request.approverCountry})),
+          ],
+          if (request.reauth != null) ...[
+            const SizedBox(height: 14),
+            Text(loc[request.reauth == 'password' ? 'link.reauthPassword' : 'link.reauthMfa'], style: ColituText.muted),
+            const SizedBox(height: 8),
+            ColituField(
+              controller: _proof,
+              label: loc[request.reauth == 'password' ? 'auth.password' : 'link.reauthCodeLabel'],
+              obscureText: request.reauth == 'password',
+              keyboardType: request.reauth == 'password' ? TextInputType.visiblePassword : TextInputType.text,
+              autocorrect: false,
+              maxLength: 128,
+              textInputAction: TextInputAction.done,
+              enabled: !_busy,
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _decide(true),
+            ),
+          ],
           if (_error != null) ...[const SizedBox(height: 12), ColituNotice(_error!)],
           const SizedBox(height: 16),
-          ColituButton(label: loc['link.approve'], loading: _busy, onPressed: () => _decide(true)),
+          ColituButton(
+            label: loc['link.approve'],
+            loading: _busy,
+            onPressed: request.reauth != null && _proof.text.trim().isEmpty ? null : () => _decide(true),
+          ),
           const SizedBox(height: 8),
           ColituButton.secondary(
             label: loc['link.deny'],
