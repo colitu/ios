@@ -662,7 +662,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         }
         let generation = bridge.generation
         tun2socks.start(
-            config: Tun2Socks.config(socksPort: socksPort, mtu: TunMtu.intValue, username: user, password: pass, maxSessions: sessionCap),
+            config: Tun2Socks.config(socksPort: socksPort, mtu: TunMtu.intValue, username: user, password: pass, maxSessions: Self.sessionLimit(sessionCap, xhttp: coreUsesXhttp)),
             fd: bridge.tunFD
         ) { [weak self] result, requested in
             // Expected after stopXray; anything else is a failure the
@@ -730,7 +730,33 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
-    static let corePolicy: [String: Int] = ["handshake": 4, "connIdle": 180, "uplinkOnly": 1, "downlinkOnly": 1]
+    static let baseCorePolicy: [String: Int] = ["handshake": 4, "connIdle": 180, "uplinkOnly": 1, "downlinkOnly": 1]
+
+    /// XHTTP carries each connection as an HTTP/2 stream with its own
+    /// request and response goroutines and buffers, about twice what a raw
+    /// connection holds (a 10-17 report: 287-474 goroutines at 40-48 MB, one
+    /// memory restart an hour). Its idle connections close after 2 minutes.
+    static func corePolicyFor(xhttp: Bool) -> [String: Int] {
+        var policy = baseCorePolicy
+        if xhttp { policy["connIdle"] = 120 }
+        return policy
+    }
+
+    /// True when the core's proxy outbound runs over XHTTP.
+    static func coreConfigUsesXhttp(_ config: [String: Any]) -> Bool {
+        let outbounds = config["outbounds"] as? [[String: Any]] ?? []
+        return outbounds.contains { outbound in
+            let stream = outbound["streamSettings"] as? [String: Any] ?? [:]
+            return (stream["network"] as? String)?.lowercased() == "xhttp"
+        }
+    }
+
+    /// The hev session cap for the next core: lower over XHTTP (see
+    /// `corePolicyFor(xhttp:)`), never above the cap memory restarts left.
+    static let sessionCapXhttp = 192
+    static func sessionLimit(_ cap: Int, xhttp: Bool) -> Int {
+        xhttp ? min(cap, sessionCapXhttp) : cap
+    }
 
     static func socksCoreRequest(
         from base64Text: String,
@@ -782,7 +808,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         var policy = config["policy"] as? [String: Any] ?? [:]
         var levels = policy["levels"] as? [String: Any] ?? [:]
         var level0 = levels["0"] as? [String: Any] ?? [:]
-        for (key, value) in Self.corePolicy where level0[key] == nil {
+        for (key, value) in Self.corePolicyFor(xhttp: Self.coreConfigUsesXhttp(config)) where level0[key] == nil {
             level0[key] = value
         }
         levels["0"] = level0
@@ -1720,9 +1746,19 @@ private extension PacketTunnelProvider {
             guard let self = self, !Task.isCancelled, self.tunnelShouldRun else { return }
             if restartCore, self.currentPath.status == "satisfied",
                self.currentPath.interfaceType != self.coreInterfaceType {
-                self.stabilityLog("reconnect_scheduled", reason: "interface_switched")
-                self.restartCoreForNewSituation(reason: reason)
-                return
+                // The core's connection lives on the interface it was opened
+                // on. Gone (Wi-Fi lost): restart at once. Still there (Wi-Fi
+                // came back while cellular stays up, or a flapping Wi-Fi):
+                // the connection keeps working, so probe first instead of
+                // cutting every open connection on each switch.
+                if Self.coreInterfaceGone(core: self.coreInterfaceType, available: self.currentPath.availableInterfaceTypes) {
+                    self.stabilityLog("reconnect_scheduled", reason: "interface_switched")
+                    self.restartCoreForNewSituation(reason: reason)
+                    return
+                }
+                self.stabilityLog("interface_switched_kept", reason: reason.rawValue, metadata: [
+                    "coreInterface": self.coreInterfaceType, "pathInterface": self.currentPath.interfaceType
+                ])
             }
             let result = await self.confirmTunnelHealth(reason: reason.rawValue)
             if result == .success {
@@ -1731,6 +1767,12 @@ private extension PacketTunnelProvider {
                 self.restartCoreForNewSituation(reason: reason)
             }
         }
+    }
+
+    /// True when the interface the core opened its connection on is no
+    /// longer available (an unknown core interface counts as gone).
+    static func coreInterfaceGone(core: String, available: Set<String>) -> Bool {
+        core == "unknown" || core == "other" || !available.contains(core)
     }
 
     func startPowerMonitor() {
@@ -1837,12 +1879,16 @@ private extension PacketTunnelProvider {
         wakeRecoveryTask?.cancel()
         wakeRecoveryTask = nil
         // The QUIC reset does nothing for TCP transports (XHTTP over HTTP/2,
-        // raw, Trojan): their pooled connection to the server outlives the
-        // sleep here while the server or a NAT has dropped it, and every
-        // request, the core's DoH lookups too, waited on it until TCP gave
-        // up, minutes later (one wake at 05:28 was only restarted at 05:32;
-        // stuck DoH requests piled up to 1284 goroutines and iOS killed the
-        // extension for memory). Restart the core at once.
+        // raw, Trojan): after a long sleep their pooled connection to the
+        // server outlives the sleep here while the server or a NAT has
+        // dropped it, and every request, the core's DoH lookups too, waited
+        // on it until TCP gave up, minutes later (stuck DoH requests piled up
+        // to 1284 goroutines and iOS killed the extension for memory). After
+        // a long sleep restart the core at once. A short sleep (each screen
+        // lock) usually leaves the connection alive: restarting then cut
+        // every open connection on every unlock (5.9.2: about every 4
+        // minutes), so the wake health check below decides instead; a stale
+        // connection fails its 3 s probes and is restarted ~4.5 s after wake.
         if sleptSeconds >= Self.tcpRestartAfterSleepSeconds, !coreUsesQuicTransport,
            coreRunning, !restartingCore, !userInitiatedStop,
            restartCoreAfterWake(reason: .appWakeupLongSleep, metadata: ["sleptSec": sleptSeconds]) {
@@ -1924,6 +1970,11 @@ private extension PacketTunnelProvider {
         return true
     }
 
+    /// The core runs XHTTP (heavier per connection, see `corePolicyFor(xhttp:)`).
+    var coreUsesXhttp: Bool {
+        (currentProfile.proto ?? "").lowercased().contains("/xhttp")
+    }
+
     /// Hysteria2 (QUIC) is handled by the QUIC reset after a sleep; every
     /// other transport runs over TCP.
     var coreUsesQuicTransport: Bool {
@@ -1940,8 +1991,9 @@ private extension PacketTunnelProvider {
     /// resetting it then only cut every open connection on each unlock.
     static let quicResetAfterSleepSeconds = 20
     /// A sleep at least this long restarts the core of a TCP transport at
-    /// wake (same reasoning as `quicResetAfterSleepSeconds`).
-    static let tcpRestartAfterSleepSeconds = 20
+    /// wake without probing first: by then mobile NATs have usually dropped
+    /// the idle connection. Shorter sleeps are probed (`wakeHealthCheck`).
+    static let tcpRestartAfterSleepSeconds = 600
     /// Wake restarts are at least this far apart.
     static let wakeRestartMinInterval: TimeInterval = 30
     /// The keepalive leaves probing to the wake handler for this long after
@@ -2914,6 +2966,9 @@ private struct TunnelPathInfo {
     var isConstrained = false
     var supportsIPv4 = true
     var supportsIPv6 = false
+    /// Types of every interface the path could use now (not only the one in
+    /// use); not part of `signature`.
+    var availableInterfaceTypes: Set<String> = []
 
     init() {}
 
@@ -2946,6 +3001,15 @@ private struct TunnelPathInfo {
         }
         supportsIPv4 = path.supportsIPv4
         supportsIPv6 = path.supportsIPv6
+        availableInterfaceTypes = Set(path.availableInterfaces.map { interface -> String in
+            switch interface.type {
+            case .wifi: return "wifi"
+            case .cellular: return "cellular"
+            case .wiredEthernet: return "ethernet"
+            case .loopback: return "loopback"
+            default: return "other"
+            }
+        })
     }
 
     var signature: String {

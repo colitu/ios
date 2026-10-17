@@ -53,6 +53,10 @@ void main() {
           'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
           '-subj', '/CN=localhost',
           '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+          // Apple's trust evaluation (macOS CI) rejects a TLS server
+          // certificate without these, even as its own anchor.
+          '-addext', 'extendedKeyUsage=serverAuth',
+          '-addext', 'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign',
           '-keyout', '${dir.path}/key.pem',
           '-out', '${dir.path}/cert.pem',
         ]);

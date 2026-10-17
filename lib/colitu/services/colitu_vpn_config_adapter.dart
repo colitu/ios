@@ -67,6 +67,24 @@ class ColituVPNConfigAdapter {
           ? 10
           : 0);
 
+  /// The transport that last worked here, when it may start first without
+  /// a probe: never a TCP transport while Hysteria2 is on offer and not
+  /// [excluded] (stalled or hinted-blocked), so the fastest transport is
+  /// tried again instead of a remembered TCP one keeping it out for good
+  /// (an iPhone on 10-17 stayed on XHTTP all day). Same rule as Android's
+  /// ColituTransportOrder.remembered. Null: the probe and the rank decide.
+  static String? rememberedTransport({
+    required String? lastGood,
+    required Iterable<String> offered,
+    required Set<String> excluded,
+  }) {
+    if (lastGood == null || excluded.contains(lastGood)) return null;
+    final hysteriaOffered =
+        offered.contains('hysteria2') && !excluded.contains('hysteria2');
+    if (lastGood != 'hysteria2' && hysteriaOffered) return null;
+    return lastGood;
+  }
+
   static const _probeTimeout = Duration(milliseconds: 3000);
   static const _quicProbeTimeout = Duration(milliseconds: 3600);
 

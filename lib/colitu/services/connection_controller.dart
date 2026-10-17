@@ -1401,9 +1401,11 @@ class ColituConnectionController extends ChangeNotifier
               ).compareTo(ColituVPNConfigAdapter.transportRankFor(b)),
             ))
             .firstOrNull;
-    final prefer = lastGood != null && !excluded.contains(lastGood)
-        ? lastGood
-        : null;
+    final prefer = ColituVPNConfigAdapter.rememberedTransport(
+      lastGood: lastGood,
+      offered: offered,
+      excluded: excluded,
+    );
     _adapter.networkToken = _hints.tokenFor(_clientNetwork);
     // No memory of this network: the transports that worked for most users
     // here go first and the probe round is skipped (Adaptive Connect 3.0).
