@@ -27,6 +27,9 @@ TunJson _$TunJsonFromJson(Map<String, dynamic> json) => TunJson(
   ..includeAllNetworks = json['includeAllNetworks'] as bool?
   ..excludedRoutes = (json['excludedRoutes'] as List<dynamic>?)
       ?.map((e) => e as String)
+      .toList()
+  ..dohUrls = (json['dohUrls'] as List<dynamic>?)
+      ?.map((e) => e as String)
       .toList();
 
 Map<String, dynamic> _$TunJsonToJson(TunJson instance) => <String, dynamic>{
@@ -46,6 +49,7 @@ Map<String, dynamic> _$TunJsonToJson(TunJson instance) => <String, dynamic>{
   'disallowAppList': ?instance.disallowAppList,
   'includeAllNetworks': ?instance.includeAllNetworks,
   'excludedRoutes': ?instance.excludedRoutes,
+  'dohUrls': ?instance.dohUrls,
 };
 
 OnDemandRule _$OnDemandRuleFromJson(Map<String, dynamic> json) => OnDemandRule(

@@ -442,6 +442,15 @@ class PreferencesKey {
   Future<void> saveColituAdBlockDoh(String value) =>
       _prefs.setString(_colituAdBlockDoh, value);
 
+  static const _colituSystemDoh = "colituSystemDoh";
+
+  /// The unfiltered system DNS resolvers the panel named last
+  /// (comma-separated, bootstrap `dns.doh`).
+  Future<String?> readColituSystemDoh() => _prefs.getString(_colituSystemDoh);
+
+  Future<void> saveColituSystemDoh(String value) =>
+      _prefs.setString(_colituSystemDoh, value);
+
   static const _colituPrivacyMode = "colituPrivacyMode";
 
   /// Privacy mode: Russian addresses go through the tunnel too, instead of

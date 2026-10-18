@@ -1,4 +1,5 @@
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
+import 'package:colitu_vpn/colitu/services/colitu_system_doh.dart';
 import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 
@@ -620,6 +621,9 @@ class VPNStatus {
   /// no such field.
   final List<String>? adBlockDoh;
 
+  /// Bootstrap `dns.doh`: unfiltered system DNS resolvers; null when absent.
+  final List<String>? systemDoh;
+
   const VPNStatus({
     required this.authenticated,
     required this.subscriptionActive,
@@ -633,6 +637,7 @@ class VPNStatus {
     this.maintenanceMessage,
     this.trial,
     this.adBlockDoh,
+    this.systemDoh,
   });
 
   /// Connecting is refused for a reason other than the plan (app policy or
@@ -671,6 +676,7 @@ class VPNStatus {
             ? TrialTransition.fromBootstrap(entitlement, source)
             : null,
         adBlockDoh: ColituAdBlock.serversOf(source),
+        systemDoh: ColituSystemDoh.serversOf(source),
       );
     }
     return VPNStatus(

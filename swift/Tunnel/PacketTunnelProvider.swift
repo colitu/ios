@@ -62,6 +62,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// The proxy server's name and the IPv4 address it had when the tunnel
     /// started (also the address excluded from the tunnel's routes).
     private var pinnedServer: PinnedServer?
+    /// The DNS-over-HTTPS resolver the system DNS uses (nil: classic DNS),
+    /// the settings it was applied with and the classic DNS to fall back to.
+    private var systemDoh: SystemDohChoice?
+    private var appliedSettings: NEPacketTunnelNetworkSettings?
+    private var classicDnsSettings: NEDNSSettings?
+    private var dohFailures = 0
+    private var lastDohCheckAt: Date?
     private var lastReachabilityCheckAt: Date?
     /// Network interface type the running core was started on.
     private var coreInterfaceType = "unknown"
@@ -301,7 +308,68 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
                 settings.dnsSettings = dnsSettings
             }
         }
+        // The system DNS over one encrypted DoH connection through the tunnel
+        // (5.9.4): a UDP session per lookup through the core held several
+        // goroutines each and busy browsing reached the memory cap. The
+        // resolver must not be the VPN server (its address leaves the
+        // tunnel) nor an address split tunneling sends outside; its name is
+        // resolved here, before the tunnel's DNS applies.
+        classicDnsSettings = settings.dnsSettings as? NEDNSSettings
+        systemDoh = nil
+        dohFailures = 0
+        lastDohCheckAt = nil
+        let outside = (ipv4.excludedRoutes ?? [])
+        if let urls = request.tun?.dohUrls, !urls.isEmpty,
+           let choice = Self.chooseSystemDoh(
+               urls: urls,
+               avoid: { ip in Self.ipv4(ip, isInside: outside) },
+               resolve: { [self] host in self.resolveIPv4Address(host) }
+           ) {
+            let doh = NEDNSOverHTTPSSettings(servers: [choice.ip])
+            doh.serverURL = choice.url
+            doh.matchDomains = [""]
+            settings.dnsSettings = doh
+            systemDoh = choice
+        }
+        stabilityLog("dns_mode", reason: systemDoh == nil ? "classic" : "doh", metadata: [
+            "dohHost": systemDoh?.host ?? "", "dohOffered": request.tun?.dohUrls?.count ?? 0
+        ])
+        appliedSettings = settings
         return settings
+    }
+
+    /// The first resolver of [urls] whose address does not leave the tunnel
+    /// ([avoid]); nil when none resolves.
+    static func chooseSystemDoh(urls: [String], avoid: (String) -> Bool, resolve: (String) -> String?) -> SystemDohChoice? {
+        for raw in urls.prefix(8) {
+            guard let url = URL(string: raw), url.scheme?.lowercased() == "https",
+                  let host = url.host, !host.isEmpty,
+                  let ip = resolve(host), !avoid(ip) else { continue }
+            let port = UInt16(clamping: url.port ?? 443)
+            return SystemDohChoice(url: url, host: host, port: port, ip: ip)
+        }
+        return nil
+    }
+
+    /// True when [ip] (dotted IPv4) lies in one of [routes].
+    static func ipv4(_ ip: String, isInside routes: [NEIPv4Route]) -> Bool {
+        guard let address = ipv4Value(ip) else { return false }
+        return routes.contains { route in
+            guard let network = ipv4Value(route.destinationAddress),
+                  let mask = ipv4Value(route.destinationSubnetMask) else { return false }
+            return address & mask == network & mask
+        }
+    }
+
+    static func ipv4Value(_ text: String) -> UInt32? {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var value: UInt32 = 0
+        for part in parts {
+            guard let octet = UInt8(part) else { return nil }
+            value = value << 8 | UInt32(octet)
+        }
+        return value
     }
 
     /// Parses the split-tunneling CIDRs from the start request. The app
@@ -1837,6 +1905,7 @@ private extension PacketTunnelProvider {
                                 // handler resets it and probes itself.
                             } else if result == .success {
                                 self.handleSuccessfulProbe()
+                                await self.checkSystemDoh()
                             } else if result == .failed, self.tunnelShouldRun {
                                 self.keepAliveFailCount += 1
                                 self.setStabilityState(.unhealthy, reason: "proxied_probe_failed")
@@ -2014,6 +2083,36 @@ private extension PacketTunnelProvider {
         scheduleReconnect(reason: reason, healthCheckFirst: false)
     }
 
+    /// While the tunnel works, the DoH resolver is checked through the core
+    /// at most every `dohCheckInterval`. Unreachable `dohFailuresBeforeFallback`
+    /// times in a row: the system DNS goes back to the classic tunnel DNS for
+    /// the rest of the session (iOS would otherwise resolve nothing).
+    func checkSystemDoh() async {
+        guard let doh = systemDoh, tunnelShouldRun else { return }
+        if let last = lastDohCheckAt, Date().timeIntervalSince(last) < Self.dohCheckInterval { return }
+        lastDohCheckAt = Date()
+        let path = doh.url.path.isEmpty ? "/" : doh.url.path
+        let target = TunnelProbe.Target(host: doh.host, port: doh.port, path: path, isServerProbe: false)
+        if await runHealthCheck(reason: "doh_check", target: target, timeout: 5) == .success {
+            dohFailures = 0
+            return
+        }
+        dohFailures += 1
+        guard dohFailures >= Self.dohFailuresBeforeFallback,
+              let settings = appliedSettings, let classic = classicDnsSettings else { return }
+        systemDoh = nil
+        settings.dnsSettings = classic
+        stabilityLog("dns_doh_fallback", reason: "doh_unreachable", metadata: ["failures": dohFailures])
+        do {
+            try await setTunnelNetworkSettings(settings)
+        } catch {
+            stabilityLog("dns_doh_fallback_failed", reason: "\(error)")
+        }
+    }
+
+    static let dohCheckInterval: TimeInterval = 120
+    static let dohFailuresBeforeFallback = 2
+
     func handleSuccessfulProbe() {
         keepAliveFailCount = 0
         reconnectAttempt = 0
@@ -2125,7 +2224,7 @@ private extension PacketTunnelProvider {
         // The periodic keepalive runs every 30 s; logging each one filled the
         // log in an hour and pushed out the events that matter. Those checks
         // are logged only when they fail or are slow.
-        let routine = reason == "keepalive_active" || reason == "keepalive_idle"
+        let routine = reason == "keepalive_active" || reason == "keepalive_idle" || reason == "doh_check"
         if !routine {
             stabilityLog(
                 "health_check_started",
@@ -2957,6 +3056,14 @@ private struct KeepAliveSettings {
     let activeProbeInterval: TimeInterval
     /// Probe period while the tunnel is idle.
     let idleProbeInterval: TimeInterval
+}
+
+/// The system DNS resolver picked for the tunnel (see `chooseSystemDoh`).
+struct SystemDohChoice {
+    let url: URL
+    let host: String
+    let port: UInt16
+    let ip: String
 }
 
 private struct TunnelPathInfo {

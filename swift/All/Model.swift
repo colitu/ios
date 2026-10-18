@@ -40,6 +40,9 @@ struct TunJson: Codable {
     /// the tunnel at the routing table. Ignored while `includeAllNetworks`
     /// is on; the core's own direct rules cover them then.
     var excludedRoutes: [String]?
+    /// DNS-over-HTTPS resolvers for the system DNS, in order of preference
+    /// (the app's ColituSystemDoh). Absent or empty: the classic tunnel DNS.
+    var dohUrls: [String]?
 }
 
 struct StartVpnRequest: Codable {

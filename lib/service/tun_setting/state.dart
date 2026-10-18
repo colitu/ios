@@ -29,6 +29,7 @@ class TunSettingState {
   // the strict kill switch and the split-tunneling routes.
   var includeAllNetworks = false;
   var excludedRoutes = <String>[];
+  var dohUrls = <String>[];
 
   Future<void> readFromPreferences() async {
     final jsonMap = await PreferencesKey().readTunSetting();
@@ -112,6 +113,7 @@ class TunSettingState {
 
     tunJson.includeAllNetworks = includeAllNetworks ? true : null;
     tunJson.excludedRoutes = excludedRoutes.isEmpty ? null : excludedRoutes.toList();
+    tunJson.dohUrls = dohUrls.isEmpty ? null : dohUrls.toList();
 
     return tunJson;
   }

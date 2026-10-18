@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:colitu_vpn/core/tools/platform.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
+import 'package:colitu_vpn/colitu/services/colitu_system_doh.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/services/core_config_finish.dart';
@@ -434,6 +435,13 @@ final class VpnService {
       split,
       keepInside: [tunSettingState.tunDnsIPv4, tunSettingState.tunDnsIPv6],
     );
+    // iOS's own DNS over one encrypted connection through the tunnel
+    // (ColituSystemDoh): the ad-blocking resolvers while ad blocking is on.
+    final adBlock =
+        ColituAdBlock.available && await PreferencesKey().readColituAdBlock();
+    tunSettingState.dohUrls = AppPlatform.isIOS
+        ? ColituSystemDoh.urlsFor(adBlock: adBlock)
+        : const <String>[];
   }
 
   static Future<void> _deleteQuietly(String path) async {

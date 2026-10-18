@@ -9,6 +9,7 @@ import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/config/adaptive_connect3.dart';
 import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
+import 'package:colitu_vpn/colitu/services/colitu_system_doh.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ac_events.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
@@ -433,6 +434,7 @@ class ColituConnectionController extends ChangeNotifier
     alwaysOn = await PreferencesKey().readColituKillSwitchEnabled();
     autoConnect = await PreferencesKey().readColituAutoConnect();
     await ColituAdBlock.load();
+    await ColituSystemDoh.load();
     adBlock = await PreferencesKey().readColituAdBlock();
     privacyMode = await PreferencesKey().readColituPrivacyMode();
     ColituRuBypass.privacyMode = privacyMode;
@@ -591,6 +593,7 @@ class ColituConnectionController extends ChangeNotifier
       // a pause that came from this check ends with it.
       if (paused != null && _pauseFromStatus) paused = null;
       if (await ColituAdBlock.remember(fresh.adBlockDoh)) _notify();
+      await ColituSystemDoh.remember(fresh.systemDoh);
       return fresh;
     } on APIException catch (e) {
       if (e.code == APIErrorCode.deviceOverLimit) {

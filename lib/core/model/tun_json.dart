@@ -32,6 +32,9 @@ class TunJson {
   bool? includeAllNetworks;
   // apple: split tunneling CIDRs that leave the tunnel at the routing table
   List<String>? excludedRoutes;
+  // apple: DNS-over-HTTPS resolvers for the system DNS, in order of
+  // preference (ColituSystemDoh); absent = the classic tunnel DNS
+  List<String>? dohUrls;
 
   TunJson(
     this.tunDnsIPv4,
