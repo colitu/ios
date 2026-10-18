@@ -67,7 +67,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     private var systemDoh: SystemDohChoice?
     private var appliedSettings: NEPacketTunnelNetworkSettings?
     private var classicDnsSettings: NEDNSSettings?
-    private var dohFailures = 0
+    /// The resolver picked at start and its settings, kept while the classic
+    /// DNS stands in for it (see `checkSystemDoh`).
+    private var dohCandidate: SystemDohChoice?
+    private var dohDnsSettings: NEDNSOverHTTPSSettings?
+    private var dohRestores = 0
+    /// DoH checks since the last tunnel sample.
+    private var dohChecksOk = 0
+    private var dohChecksFailed = 0
     private var lastDohCheckAt: Date?
     private var lastReachabilityCheckAt: Date?
     /// Network interface type the running core was started on.
@@ -87,6 +94,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     /// answered. Two such misses in a session: the server has no probe, the
     /// public hosts go first for the rest of the session.
     private var nodeProbeMisses = 0
+    /// The stage the server's probe last failed at (see `TunnelProbe.Outcome`).
+    private var lastServerProbeStage = ""
     /// The online check waited its whole cap without reaching anything while
     /// restarts were due: it cannot see this network (one that filters every
     /// endpoint it knows), so it no longer holds restarts back or excuses
@@ -316,7 +325,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         // resolved here, before the tunnel's DNS applies.
         classicDnsSettings = settings.dnsSettings as? NEDNSSettings
         systemDoh = nil
-        dohFailures = 0
+        dohCandidate = nil
+        dohDnsSettings = nil
+        dohRestores = 0
         lastDohCheckAt = nil
         let outside = (ipv4.excludedRoutes ?? [])
         if let urls = request.tun?.dohUrls, !urls.isEmpty,
@@ -330,6 +341,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             doh.matchDomains = [""]
             settings.dnsSettings = doh
             systemDoh = choice
+            dohCandidate = choice
+            dohDnsSettings = doh
         }
         stabilityLog("dns_mode", reason: systemDoh == nil ? "classic" : "doh", metadata: [
             "dohHost": systemDoh?.host ?? "", "dohOffered": request.tun?.dohUrls?.count ?? 0
@@ -1479,8 +1492,13 @@ private extension PacketTunnelProvider {
                     self.stabilityLog("tunnel_sample", reason: "periodic", metadata: [
                         "upKB": Int((snapshot.up >= self.lastSampleUp ? snapshot.up - self.lastSampleUp : snapshot.up) >> 10),
                         "downKB": Int((snapshot.down >= self.lastSampleDown ? snapshot.down - self.lastSampleDown : snapshot.down) >> 10),
-                        "detail": self.memoryDetail
+                        "detail": self.memoryDetail,
+                        "dns": self.systemDoh == nil ? "classic" : "doh",
+                        "dohOk": self.dohChecksOk,
+                        "dohFail": self.dohChecksFailed
                     ])
+                    self.dohChecksOk = 0
+                    self.dohChecksFailed = 0
                     self.lastSampleUp = snapshot.up
                     self.lastSampleDown = snapshot.down
                 }
@@ -2000,7 +2018,7 @@ private extension PacketTunnelProvider {
             if first == .failed, targets.first.isServerProbe {
                 nodeProbeMisses += 1
                 if nodeProbeMisses == Self.nodeProbeMissLimit {
-                    stabilityLog("node_probe_missing", reason: reason)
+                    stabilityLog("node_probe_missing", reason: reason, metadata: ["probeStage": lastServerProbeStage])
                 }
             }
             return .success
@@ -2083,35 +2101,60 @@ private extension PacketTunnelProvider {
         scheduleReconnect(reason: reason, healthCheckFirst: false)
     }
 
-    /// While the tunnel works, the DoH resolver is checked through the core
-    /// at most every `dohCheckInterval`. Unreachable `dohFailuresBeforeFallback`
-    /// times in a row: the system DNS goes back to the classic tunnel DNS for
-    /// the rest of the session (iOS would otherwise resolve nothing).
+    /// Called after a successful keepalive, so the tunnel itself answers. The
+    /// DoH resolver is checked through the core by its address, as iOS
+    /// reaches it, at most every `dohCheckInterval`. A miss is checked again
+    /// after `dohRecheckDelay`: two misses in a row switch the system DNS to
+    /// the classic tunnel DNS about 12 s after the first one (5.9.4 waited for
+    /// two checks two minutes apart: up to four minutes without DNS). With the
+    /// classic DNS the resolver is tried every `dohRetryInterval`; reached
+    /// twice in a row it comes back, at most `dohRestoreLimit` times a session.
     func checkSystemDoh() async {
-        guard let doh = systemDoh, tunnelShouldRun else { return }
-        if let last = lastDohCheckAt, Date().timeIntervalSince(last) < Self.dohCheckInterval { return }
+        guard let doh = dohCandidate, tunnelShouldRun else { return }
+        let usingDoh = systemDoh != nil
+        if !usingDoh, dohRestores >= Self.dohRestoreLimit { return }
+        let interval = usingDoh ? Self.dohCheckInterval : Self.dohRetryInterval
+        if let last = lastDohCheckAt, Date().timeIntervalSince(last) < interval { return }
         lastDohCheckAt = Date()
         let path = doh.url.path.isEmpty ? "/" : doh.url.path
-        let target = TunnelProbe.Target(host: doh.host, port: doh.port, path: path, isServerProbe: false)
-        if await runHealthCheck(reason: "doh_check", target: target, timeout: 5) == .success {
-            dohFailures = 0
-            return
+        let target = TunnelProbe.Target(host: doh.host, port: doh.port, path: path, isServerProbe: false, address: doh.ip, label: "doh")
+        var reached = await dohReachable(target)
+        // A single answer decides nothing: lost once, or back once.
+        if reached != usingDoh {
+            try? await Task.sleep(nanoseconds: UInt64(Self.dohRecheckDelay * 1_000_000_000))
+            guard tunnelShouldRun, !Task.isCancelled, reconnectTask == nil, !restartingCore else { return }
+            reached = await dohReachable(target)
         }
-        dohFailures += 1
-        guard dohFailures >= Self.dohFailuresBeforeFallback,
-              let settings = appliedSettings, let classic = classicDnsSettings else { return }
-        systemDoh = nil
-        settings.dnsSettings = classic
-        stabilityLog("dns_doh_fallback", reason: "doh_unreachable", metadata: ["failures": dohFailures])
+        guard reached != usingDoh, let settings = appliedSettings else { return }
+        if usingDoh {
+            guard let classic = classicDnsSettings else { return }
+            systemDoh = nil
+            settings.dnsSettings = classic
+            stabilityLog("dns_doh_fallback", reason: "doh_unreachable", metadata: ["dohHost": doh.host])
+        } else {
+            guard let dohSettings = dohDnsSettings else { return }
+            dohRestores += 1
+            systemDoh = doh
+            settings.dnsSettings = dohSettings
+            stabilityLog("dns_doh_restored", reason: "doh_reachable", metadata: ["dohHost": doh.host, "restores": dohRestores])
+        }
         do {
             try await setTunnelNetworkSettings(settings)
         } catch {
-            stabilityLog("dns_doh_fallback_failed", reason: "\(error)")
+            stabilityLog("dns_settings_failed", reason: "\(error)")
         }
     }
 
+    private func dohReachable(_ target: TunnelProbe.Target) async -> Bool {
+        let reached = await runHealthCheck(reason: "doh_check", target: target, timeout: 5) == .success
+        if reached { dohChecksOk += 1 } else { dohChecksFailed += 1 }
+        return reached
+    }
+
     static let dohCheckInterval: TimeInterval = 120
-    static let dohFailuresBeforeFallback = 2
+    static let dohRecheckDelay: TimeInterval = 2
+    static let dohRetryInterval: TimeInterval = 300
+    static let dohRestoreLimit = 3
 
     func handleSuccessfulProbe() {
         keepAliveFailCount = 0
@@ -2182,7 +2225,7 @@ private extension PacketTunnelProvider {
         if second == .success, targets.first.isServerProbe {
             nodeProbeMisses += 1
             if nodeProbeMisses == Self.nodeProbeMissLimit {
-                stabilityLog("node_probe_missing", reason: reason)
+                stabilityLog("node_probe_missing", reason: reason, metadata: ["probeStage": lastServerProbeStage])
             }
         }
         // Apps kept receiving data meanwhile: the probe is what is failing
@@ -2255,16 +2298,20 @@ private extension PacketTunnelProvider {
         guard port != 0 else { return .skipped }
 
         let startedAt = Date()
-        let success = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        let outcome = await withCheckedContinuation { (continuation: CheckedContinuation<TunnelProbe.Outcome, Never>) in
             DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: TunnelProbe.run(socksPort: port, username: user, password: pass, target: target, timeout: timeout))
+                continuation.resume(returning: TunnelProbe.probe(socksPort: port, username: user, password: pass, target: target, timeout: timeout))
             }
         }
+        let success = outcome.reached
+        if target.isServerProbe, !success { lastServerProbeStage = outcome.stage }
         var metadata = stabilityMetadata(
             healthCheckResult: success ? HealthCheckResult.success.rawValue : HealthCheckResult.failed.rawValue
         )
         let probeMs = Int(Date().timeIntervalSince(startedAt) * 1000)
         metadata["probeMs"] = probeMs
+        metadata["probeTarget"] = target.label
+        if !success { metadata["probeStage"] = outcome.stage }
         if !success || !routine || probeMs >= Self.slowProbeMilliseconds {
             metadata["goroutines"] = Self.goroutineCount()
             stabilityLog(success ? "health_check_success" : "health_check_failed", reason: reason, metadata: metadata)
@@ -2705,17 +2752,23 @@ enum TunnelProbe {
         let port: UInt16
         let path: String
         let isServerProbe: Bool
+        /// Connect to this IPv4 address instead of the name (the name still
+        /// goes in the Host header): the system DoH resolver is reached by
+        /// its address, as iOS reaches it.
+        var address: String? = nil
+        /// What the log calls this target: server, google, microsoft, doh.
+        var label = "custom"
 
         /// The server's own probe: nginx on :3443 (the DoH and speed-test
         /// site). The request goes as plain HTTP to that TLS port and nginx
         /// answers "400 plain HTTP request sent to HTTPS port", a status line
         /// all the same, so no TLS is needed here.
         static func server(_ host: String) -> Target {
-            Target(host: host, port: 3443, path: "/ping", isServerProbe: true)
+            Target(host: host, port: 3443, path: "/ping", isServerProbe: true, label: "server")
         }
 
-        static let google = Target(host: "www.gstatic.com", port: 80, path: "/generate_204", isServerProbe: false)
-        static let microsoft = Target(host: "www.msftconnecttest.com", port: 80, path: "/connecttest.txt", isServerProbe: false)
+        static let google = Target(host: "www.gstatic.com", port: 80, path: "/generate_204", isServerProbe: false, label: "google")
+        static let microsoft = Target(host: "www.msftconnecttest.com", port: 80, path: "/connecttest.txt", isServerProbe: false, label: "microsoft")
     }
 
     /// Plain TCP connect with a timeout: "ok", "timeout", "refused",
@@ -2760,8 +2813,23 @@ enum TunnelProbe {
 
     /// Blocking; call it off the Swift concurrency pool.
     static func run(socksPort: UInt16, username: String, password: String, target: Target, timeout: TimeInterval) -> Bool {
+        probe(socksPort: socksPort, username: username, password: password, target: target, timeout: timeout).reached
+    }
+
+    /// How a probe ended: reached, or the stage it failed at, so a report
+    /// tells a local SOCKS problem from a destination the core dropped
+    /// ("http_closed": a block or a failed dial on the way) and from a path
+    /// that never answered ("http_timeout").
+    struct Outcome {
+        let reached: Bool
+        let stage: String
+    }
+
+    /// Blocking; call it off the Swift concurrency pool.
+    static func probe(socksPort: UInt16, username: String, password: String, target: Target, timeout: TimeInterval) -> Outcome {
+        func fail(_ stage: String) -> Outcome { Outcome(reached: false, stage: stage) }
         let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
+        guard fd >= 0 else { return fail("socket") }
         defer { Darwin.close(fd) }
         var one: Int32 = 1
         _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
@@ -2772,45 +2840,69 @@ enum TunnelProbe {
         address.sin_family = sa_family_t(AF_INET)
         address.sin_addr.s_addr = inet_addr(ProxyHost)
         address.sin_port = CFSwapInt16HostToBig(socksPort)
-        guard setTimeout(fd, until: deadline) else { return false }
+        guard setTimeout(fd, until: deadline) else { return fail("socks_connect") }
         let connected = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { raw in
                 Darwin.connect(fd, raw, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
             }
         }
-        guard connected else { return false }
+        guard connected else { return fail("socks_connect") }
 
         // Greeting: version 5, one method, username/password (RFC 1929).
         let user = Array(username.utf8)
         let pass = Array(password.utf8)
-        guard user.count < 256, pass.count < 256,
-              send(fd, [5, 1, 2]), let method = receive(fd, count: 2, until: deadline),
-              method == [5, 2] else { return false }
-        guard send(fd, [1, UInt8(user.count)] + user + [UInt8(pass.count)] + pass),
-              let auth = receive(fd, count: 2, until: deadline),
-              auth[1] == 0 else { return false }
+        guard user.count < 256, pass.count < 256, send(fd, [5, 1, 2]) else { return fail("socks_greeting") }
+        let method = receive(fd, count: 2, until: deadline)
+        guard let methodBytes = method.bytes else { return fail("socks_greeting_" + method.failure) }
+        guard methodBytes == [5, 2] else { return fail("socks_method") }
+        guard send(fd, [1, UInt8(user.count)] + user + [UInt8(pass.count)] + pass) else { return fail("socks_auth") }
+        let auth = receive(fd, count: 2, until: deadline)
+        guard let authBytes = auth.bytes else { return fail("socks_auth_" + auth.failure) }
+        guard authBytes[1] == 0 else { return fail("socks_auth_rejected") }
 
-        // CONNECT host:port by name.
-        let host = Array(target.host.utf8)
-        guard host.count < 256,
-              send(fd, [5, 1, 0, 3, UInt8(host.count)] + host + [UInt8(target.port >> 8), UInt8(target.port & 0xFF)]),
-              let reply = receive(fd, count: 4, until: deadline),
-              reply[0] == 5, reply[1] == 0 else { return false }
+        // CONNECT by name, or by address when the target has one.
+        let port = [UInt8(target.port >> 8), UInt8(target.port & 0xFF)]
+        let request: [UInt8]
+        if let ip = target.address, let octets = ipv4Octets(ip) {
+            request = [5, 1, 0, 1] + octets + port
+        } else {
+            let host = Array(target.host.utf8)
+            guard host.count < 256 else { return fail("host_name") }
+            request = [5, 1, 0, 3, UInt8(host.count)] + host + port
+        }
+        guard send(fd, request) else { return fail("socks_request") }
+        let reply = receive(fd, count: 4, until: deadline)
+        guard let replyBytes = reply.bytes else { return fail("socks_reply_" + reply.failure) }
+        guard replyBytes[0] == 5 else { return fail("socks_reply_version") }
+        guard replyBytes[1] == 0 else { return fail("socks_reply_\(replyBytes[1])") }
         let boundLength: Int
-        switch reply[3] {
+        switch replyBytes[3] {
         case 1: boundLength = 4 + 2
         case 4: boundLength = 16 + 2
         case 3:
-            guard let length = receive(fd, count: 1, until: deadline) else { return false }
+            guard let length = receive(fd, count: 1, until: deadline).bytes else { return fail("socks_bound") }
             boundLength = Int(length[0]) + 2
-        default: return false
+        default: return fail("socks_bound")
         }
-        guard receive(fd, count: boundLength, until: deadline) != nil else { return false }
+        guard receive(fd, count: boundLength, until: deadline).bytes != nil else { return fail("socks_bound") }
 
-        let request = "GET \(target.path) HTTP/1.1\r\nHost: \(target.host)\r\nUser-Agent: Colitu\r\nConnection: close\r\n\r\n"
-        guard send(fd, Array(request.utf8)),
-              let status = receive(fd, count: 7, until: deadline) else { return false }
-        return status == Array("HTTP/1.".utf8)
+        let get = "GET \(target.path) HTTP/1.1\r\nHost: \(target.host)\r\nUser-Agent: Colitu\r\nConnection: close\r\n\r\n"
+        guard send(fd, Array(get.utf8)) else { return fail("http_send") }
+        let status = receive(fd, count: 7, until: deadline)
+        guard let statusBytes = status.bytes else { return fail("http_" + status.failure) }
+        guard statusBytes == Array("HTTP/1.".utf8) else { return fail("http_not_http") }
+        return Outcome(reached: true, stage: "ok")
+    }
+
+    private static func ipv4Octets(_ ip: String) -> [UInt8]? {
+        let parts = ip.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        var octets: [UInt8] = []
+        for part in parts {
+            guard let value = UInt8(part) else { return nil }
+            octets.append(value)
+        }
+        return octets
     }
 
     private static func setTimeout(_ fd: Int32, until deadline: Date) -> Bool {
@@ -2840,11 +2932,13 @@ enum TunnelProbe {
         }
     }
 
-    private static func receive(_ fd: Int32, count: Int, until deadline: Date) -> [UInt8]? {
+    /// The bytes, or nil and why: "timeout", "closed" (the other end closed
+    /// first) or "error_<errno>".
+    private static func receive(_ fd: Int32, count: Int, until deadline: Date) -> (bytes: [UInt8]?, failure: String) {
         var bytes = [UInt8](repeating: 0, count: count)
         var offset = 0
         while offset < count {
-            guard setTimeout(fd, until: deadline) else { return nil }
+            guard setTimeout(fd, until: deadline) else { return (nil, "timeout") }
             let received = bytes.withUnsafeMutableBytes { buffer -> Int in
                 Darwin.recv(fd, buffer.baseAddress! + offset, count - offset, 0)
             }
@@ -2852,11 +2946,14 @@ enum TunnelProbe {
                 offset += received
             } else if received < 0 && errno == EINTR {
                 continue
+            } else if received == 0 {
+                return (nil, "closed")
             } else {
-                return nil
+                let code = errno
+                return (nil, code == EAGAIN || code == EWOULDBLOCK ? "timeout" : "error_\(code)")
             }
         }
-        return bytes
+        return (bytes, "")
     }
 }
 
