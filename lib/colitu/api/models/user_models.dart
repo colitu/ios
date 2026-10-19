@@ -1,3 +1,26 @@
+class ColituCompany {
+  final String name;
+
+  /// `owner`, `admin` or `member`.
+  final String role;
+
+  const ColituCompany({required this.name, required this.role});
+
+  static ColituCompany? tryParse(Object? value) {
+    if (value is! Map<String, dynamic>) {
+      return null;
+    }
+    final name = value['name'];
+    if (name is! String || name.trim().isEmpty) {
+      return null;
+    }
+    final role = value['role'];
+    return ColituCompany(name: name, role: role is String ? role : 'member');
+  }
+
+  Map<String, dynamic> toJson() => {'name': name, 'role': role};
+}
+
 class ColituUser {
   final String id;
   final String email;
@@ -12,6 +35,7 @@ class ColituUser {
   final DateTime? expiresAt;
   final ColituFreeQuota? freeQuota;
   final bool premiumAllowed;
+  final ColituCompany? company;
 
   const ColituUser({
     required this.id,
@@ -27,6 +51,7 @@ class ColituUser {
     this.expiresAt,
     this.freeQuota,
     this.premiumAllowed = false,
+    this.company,
   });
 
   bool get hasActiveSubscription {
@@ -103,6 +128,7 @@ class ColituUser {
       premiumAllowed:
           subscription?.premiumAllowed ??
           _bool(source['premiumAllowed'] ?? source['premium_allowed']),
+      company: ColituCompany.tryParse(source['company'] ?? json['company']),
     );
   }
 
@@ -119,6 +145,7 @@ class ColituUser {
     if (plan != null) 'plan': plan,
     if (expiresAt != null) 'expiresAt': expiresAt!.toIso8601String(),
     'premiumAllowed': premiumAllowed,
+    if (company != null) 'company': company!.toJson(),
   };
 
   ColituUser copyWithSubscription(SubscriptionSnapshot snapshot) {
@@ -136,6 +163,7 @@ class ColituUser {
       expiresAt: snapshot.expiresAt ?? expiresAt,
       freeQuota: snapshot.freeQuota,
       premiumAllowed: snapshot.premiumAllowed,
+      company: company,
     );
   }
 }

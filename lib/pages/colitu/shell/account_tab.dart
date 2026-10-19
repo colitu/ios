@@ -320,6 +320,15 @@ class _AccountTabState extends State<AccountTab> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (user?.company != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            loc.format('account.company', {'name': user!.company!.name}),
+                            style: ColituText.small,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -587,6 +596,14 @@ class _AccountTabState extends State<AccountTab> {
           title: loc['invite.title'],
           hint: loc['invite.rowHint'],
           onTap: () => ColituInvitePage.open(context),
+        ),
+        const SizedBox(height: 8),
+        ColituActionRow(
+          key: const ValueKey('reviewRow'),
+          icon: CupertinoIcons.star,
+          title: loc['review.title'],
+          hint: loc['review.hint'],
+          onTap: () => _open('/review'),
         ),
         const SizedBox(height: 8),
         ColituSwitchRow(

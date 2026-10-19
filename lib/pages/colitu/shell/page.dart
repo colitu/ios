@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/services/colitu_growth.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_survey.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
@@ -80,6 +81,9 @@ class _ColituShellPageState extends State<ColituShellPage> {
   }
 
   void _onControllerChanged() {
+    if (_controller.connected) {
+      unawaited(ColituInviteCardPrefs.instance.markConnected());
+    }
     final notice = _controller.notice;
     if (notice != null && notice != _shownNotice && mounted) {
       _shownNotice = notice;

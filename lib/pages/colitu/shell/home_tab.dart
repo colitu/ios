@@ -11,6 +11,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/colitu/theme/particles.dart';
+import 'package:colitu_vpn/pages/colitu/shell/invite_card.dart';
 import 'package:colitu_vpn/pages/colitu/shell/notice_banner.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
 
@@ -264,6 +265,7 @@ class HomeTab extends StatelessWidget {
         _LocationCard(controller: c, onChange: onChangeLocation),
         const SizedBox(height: 12),
         _PlanCard(controller: c, onOpenPlan: onOpenPlan),
+        if (c.paused == null) ColituHomeInviteCard(connected: on),
         if (!c.advancedMode) ...[
           const SizedBox(height: 6),
           Center(

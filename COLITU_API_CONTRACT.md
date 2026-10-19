@@ -90,6 +90,7 @@ Registration requires an active entitlement (new accounts get the free plan:
   [{ "protocol", "reachable", "latency_ms" }] }`, best effort.
 - `GET /me`, `GET /me/entitlement`, `GET /me/usage`, `GET /devices`,
   `DELETE /devices/{id}`.
+  `GET /me` may carry an optional `company: { "name", "role": "owner"|"admin"|"member" }` (absent without a company seat); the account tab shows `Company: <name>` only when present.
 
 ## Billing
 

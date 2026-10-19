@@ -6,8 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/services/colitu_growth.dart';
 import 'package:colitu_vpn/colitu/services/colitu_referral.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
+import 'package:colitu_vpn/pages/colitu/shell/invite_card.dart';
 
 /// "Invite a friend": the user's invite link with Copy and Share, four
 /// counters and the rules. Never shows names or e-mails of invitees.
@@ -218,6 +220,10 @@ class _LinkCard extends StatelessWidget {
               ),
             ],
           ),
+          if (ColituShare.isShareableLink(referral.link)) ...[
+            const SizedBox(height: 10),
+            ColituShareButtons(referral: referral),
+          ],
         ],
       ),
     );

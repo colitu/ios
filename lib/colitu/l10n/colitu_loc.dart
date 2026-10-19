@@ -761,6 +761,7 @@ class ColituLoc extends ChangeNotifier {
     'account.kicker': ['АККАУНТ', 'HESAP', 'ACCOUNT'],
     'account.title': ['Ваш аккаунт', 'Hesabınız', 'Your account'],
     'account.email': ['Электронная почта', 'E-posta', 'Email'],
+    'account.company': ['Компания: {name}', 'Şirket: {name}', 'Company: {name}'],
     'account.plan': ['Тариф', 'Paket', 'Plan'],
     'account.validUntil': ['Действует до', 'Geçerlilik', 'Valid until'],
     'account.devices': ['УСТРОЙСТВА', 'CİHAZLAR', 'DEVICES'],
@@ -1783,6 +1784,41 @@ class ColituLoc extends ChangeNotifier {
       'Программа приглашений сейчас отключена.',
       'Davet programı şu anda kapalı.',
       'The invite programme is switched off right now.',
+    ],
+    'invite.cardBody': [
+      'Вам обоим — {days} Premium',
+      'İkinize de {days} Premium',
+      '{days} of Premium for both of you',
+    ],
+    'invite.telegram': [
+      'Telegram',
+      'Telegram',
+      'Telegram',
+    ],
+    'invite.whatsapp': [
+      'WhatsApp',
+      'WhatsApp',
+      'WhatsApp',
+    ],
+    'invite.hide': [
+      'Скрыть',
+      'Gizle',
+      'Hide',
+    ],
+    'invite.oneTapText': [
+      'Пользуюсь Colitu VPN: быстрый и приватный. Зарегистрируйся по этой ссылке и получи {days} Premium: {link}',
+      'Colitu VPN kullanıyorum: hızlı ve gizlilik odaklı. Bu bağlantıyla hesap açarsan {days} Premium kazanırsın: {link}',
+      'I use Colitu VPN: fast and privacy-first. Sign up with this link and get {days} of Premium: {link}',
+    ],
+    'review.title': [
+      'Оставьте отзыв о расширении',
+      'Eklentimize yorum bırak',
+      'Review our browser extension',
+    ],
+    'review.hint': [
+      'Короткий отзыв помогает другим найти Colitu.',
+      'Kısa bir yorum, başkalarının Colitu\'yu bulmasına çok yardım eder.',
+      'A short review helps others find Colitu.',
     ],
     'stats.title': [
       'Статистика использования',
