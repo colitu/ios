@@ -30,6 +30,8 @@ class ColituStallWatch {
   /// every [slowInterval].
   void startSession(DateTime now) {
     _sessionStart = now;
+    _nextBulk = now.add(bulkAfter);
+    _bulkMisses = 0;
     reset(now);
   }
 
@@ -46,6 +48,15 @@ class ColituStallWatch {
   /// carries traffic without an extra check request.
   final int flowingBytes;
 
+  /// The bulk check (a node's probe file) while little arrives: the first
+  /// [bulkAfter] into a session, again [bulkInterval] after a pass and
+  /// [bulkRetry] after a miss; [bulkMissesToSwitch] misses in a row make
+  /// the primary dead even though the empty checks pass.
+  static const bulkAfter = Duration(seconds: 10);
+  static const bulkInterval = Duration(minutes: 5);
+  static const bulkRetry = Duration(seconds: 10);
+  static const bulkMissesToSwitch = 2;
+
   var _failures = 0;
   var _probing = false;
   DateTime? _lastCheck;
@@ -53,8 +64,13 @@ class ColituStallWatch {
   int? _lastDownBytes;
   DateTime? _firstFailureAt;
   DateTime? _detectedSince;
+  DateTime? _nextBulk;
+  var _bulkMisses = 0;
+  DateTime? _firstBulkMissAt;
+  var _lastFlowing = false;
 
   int get failures => _failures;
+  int get bulkMisses => _bulkMisses;
 
   /// When the run of failed checks that made the last [finish] return true
   /// began (the statistics' detection time); null before any switch.
@@ -85,7 +101,49 @@ class ColituStallWatch {
     _lastCheck = now;
     final previous = _lastDownBytes;
     _lastDownBytes = downBytes;
-    return previous != null && downBytes - previous >= flowingBytes;
+    _lastFlowing = previous != null && downBytes - previous >= flowingBytes;
+    // Real traffic proves the transport better than any check.
+    if (_lastFlowing) {
+      _bulkMisses = 0;
+      _firstBulkMissAt = null;
+    }
+    return _lastFlowing;
+  }
+
+  /// True when the check that [begin] started should also read the bulk
+  /// probe: little arrived since the last check and its turn has come.
+  bool bulkDue(DateTime now) {
+    final next = _nextBulk;
+    return !_lastFlowing && next != null && !now.isBefore(next);
+  }
+
+  /// Records a bulk check. Returns true when the transport should be
+  /// switched now (same cooldown as [finish]). A miss without a network
+  /// does not count.
+  bool finishBulk({
+    required bool ok,
+    required bool hasNetwork,
+    required DateTime now,
+  }) {
+    if (ok || !hasNetwork) {
+      _bulkMisses = 0;
+      _firstBulkMissAt = null;
+      _nextBulk = now.add(ok ? bulkInterval : bulkRetry);
+      return false;
+    }
+    _bulkMisses++;
+    _firstBulkMissAt ??= now;
+    _nextBulk = now.add(bulkRetry);
+    if (_bulkMisses < bulkMissesToSwitch) return false;
+    final last = _lastSwitch;
+    if (last != null && now.difference(last) < switchCooldown) return false;
+    _bulkMisses = 0;
+    _failures = 0;
+    _detectedSince = _firstBulkMissAt;
+    _firstBulkMissAt = null;
+    _firstFailureAt = null;
+    _lastSwitch = now;
+    return true;
   }
 
   /// Records a check's result. Returns true when the transport should be

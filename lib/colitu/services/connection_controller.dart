@@ -1749,11 +1749,44 @@ class ColituConnectionController extends ChangeNotifier
         // A dead spare without a replacement: no slack for the primary.
         threshold: _spareUnreplaceable ? 2 : null,
       );
-      final action = ColituStallWatch.decide(
-        primaryDead: dead,
-        spareAttached: spareAttached,
-        normalOk: normalOk,
-      );
+      // The empty checks passed but little arrives: a node's probe file
+      // shows whether the transport carries real traffic. Two misses in a
+      // row reconnect on the next transport.
+      var starved = false;
+      if (primaryOk && _stallWatch.bulkDue(DateTime.now())) {
+        final bulkHost = primaryCheck != null
+            ? server.host
+            : _bulkHostBesides(server);
+        if (bulkHost != null) {
+          final bulkOk = await NetClient().bulkCheck(
+            host: bulkHost,
+            proxy: primaryCheck?.directive,
+          );
+          if (_disposed ||
+              serial != _connectSerial ||
+              !connected ||
+              transport != current ||
+              _tunnelSettling) {
+            _stallWatch.reset(DateTime.now());
+            return;
+          }
+          starved = _stallWatch.finishBulk(
+            ok: bulkOk,
+            hasNetwork: bulkOk || await ColituStallWatch.deviceHasNetwork(),
+            now: DateTime.now(),
+          );
+          if (!bulkOk) {
+            debugPrint('$current passes the empty checks but the bulk check missed');
+          }
+        }
+      }
+      final action = starved
+          ? ColituWatchAction.reconnect
+          : ColituStallWatch.decide(
+              primaryDead: dead,
+              spareAttached: spareAttached,
+              normalOk: normalOk,
+            );
       if (action == ColituWatchAction.none) return;
       final network = networkKey;
       _memory.markStalled(network, server.selectionKey, current, DateTime.now());
@@ -1990,6 +2023,23 @@ class ColituConnectionController extends ChangeNotifier
     notice = null;
     transport = null;
     _notify();
+  }
+
+  /// A node other than [connected] for the bulk check without a check
+  /// proxy: the connected server's address is routed outside the tunnel.
+  String? _bulkHostBesides(VPNServer connected) {
+    for (final other in servers) {
+      final host = other.host?.trim() ?? '';
+      if (other.isMultihop ||
+          host.isEmpty ||
+          host == connected.host ||
+          host.contains(':') ||
+          InternetAddress.tryParse(host) != null) {
+        continue;
+      }
+      return host;
+    }
+    return null;
   }
 
   /// Checks through the tunnel for up to [_verifyWindow] that traffic

@@ -194,6 +194,58 @@ class NetClient {
     }
   }
 
+  /// Bytes [bulkCheck] reads from a node's probe file.
+  static const bulkCheckBytes = 128 * 1024;
+
+  /// The node's probe file (nginx on :3443, 25 MB; the Origin header is its
+  /// abuse guard), first [bulkCheckBytes] only.
+  static String bulkCheckUrl(String host) => 'https://$host:3443/down';
+
+  /// True when [bulkCheckBytes] of [host]'s probe file arrive within
+  /// [timeout]. A transport can pass the empty 204 checks and still carry no
+  /// real traffic: on an iPhone report of 10-19 Hysteria2 answered every
+  /// probe for 11 hours while the tunnel moved a few hundred KB an hour.
+  ///
+  /// [proxy] as in [trafficCheck]. Without it [host] must be a node whose
+  /// address the tunnel routes inside (not the connected server).
+  Future<bool> bulkCheck({
+    required String host,
+    Duration timeout = const Duration(seconds: 8),
+    String? proxy,
+  }) async {
+    final client = HttpClient()
+      ..connectionTimeout = timeout
+      ..idleTimeout = Duration.zero;
+    if (proxy != null) client.findProxy = (_) => proxy;
+    var received = 0;
+    try {
+      Future<bool> fetch() async {
+        final request = await client.getUrl(Uri.parse(bulkCheckUrl(host)));
+        request.headers
+          ..set(HttpHeaders.connectionHeader, 'close')
+          ..set(HttpHeaders.cacheControlHeader, 'no-cache')
+          ..set('Origin', 'https://colitu.com')
+          ..set(HttpHeaders.rangeHeader, 'bytes=0-${bulkCheckBytes - 1}');
+        final response = await request.close();
+        if (response.statusCode != 200 && response.statusCode != 206) {
+          await response.drain<void>();
+          return false;
+        }
+        await for (final chunk in response) {
+          received += chunk.length;
+          if (received >= bulkCheckBytes) return true;
+        }
+        return received >= bulkCheckBytes;
+      }
+
+      return await fetch().timeout(timeout, onTimeout: () => false);
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   final _geoIPUrl = "https://ip-check-perf.radar.cloudflare.com/";
 
   Future<GeoLocation> _geoLocation() async {

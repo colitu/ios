@@ -117,4 +117,57 @@ void main() {
       isTrue,
     );
   });
+
+  test('bulk check: two misses in a row while little arrives switch', () {
+    final watch = ColituStallWatch();
+    final t0 = DateTime(2026, 10, 19, 5, 45);
+    watch.startSession(t0);
+    // Not before bulkAfter.
+    watch.begin(t0.add(const Duration(seconds: 5)), 1000);
+    expect(watch.bulkDue(t0.add(const Duration(seconds: 5))), isFalse);
+    final t1 = t0.add(const Duration(seconds: 10));
+    watch.begin(t1, 3000);
+    expect(watch.bulkDue(t1), isTrue);
+    expect(watch.finish(ok: true, hasNetwork: true, now: t1), isFalse);
+    expect(watch.finishBulk(ok: false, hasNetwork: true, now: t1), isFalse);
+    // The retry comes after bulkRetry, not sooner.
+    expect(watch.bulkDue(t1.add(const Duration(seconds: 5))), isFalse);
+    final t2 = t1.add(ColituStallWatch.bulkRetry);
+    watch.begin(t2, 5000);
+    expect(watch.bulkDue(t2), isTrue);
+    expect(watch.finishBulk(ok: false, hasNetwork: true, now: t2), isTrue);
+    expect(watch.detectedSince, t1);
+  });
+
+  test('bulk check: real traffic or a pass resets it and waits', () {
+    final watch = ColituStallWatch();
+    final t0 = DateTime(2026, 10, 19, 5, 45);
+    watch.startSession(t0);
+    final t1 = t0.add(ColituStallWatch.bulkAfter);
+    watch.begin(t1, 0);
+    expect(watch.finishBulk(ok: false, hasNetwork: true, now: t1), isFalse);
+    expect(watch.bulkMisses, 1);
+    // 64 KiB arrived since the last check: no bulk check, misses forgotten.
+    final t2 = t1.add(ColituStallWatch.bulkRetry);
+    expect(watch.begin(t2, 70 * 1024), isTrue);
+    expect(watch.bulkDue(t2), isFalse);
+    expect(watch.bulkMisses, 0);
+    // A pass: the next bulk check only after bulkInterval.
+    final t3 = t2.add(const Duration(seconds: 5));
+    watch.begin(t3, 70 * 1024);
+    expect(watch.bulkDue(t3), isTrue);
+    expect(watch.finishBulk(ok: true, hasNetwork: true, now: t3), isFalse);
+    expect(watch.bulkDue(t3.add(const Duration(minutes: 4))), isFalse);
+    expect(watch.bulkDue(t3.add(ColituStallWatch.bulkInterval)), isTrue);
+  });
+
+  test('bulk check: a miss without a network does not count', () {
+    final watch = ColituStallWatch();
+    final t0 = DateTime(2026, 10, 19, 5, 45);
+    watch.startSession(t0);
+    final t1 = t0.add(ColituStallWatch.bulkAfter);
+    watch.begin(t1, 0);
+    expect(watch.finishBulk(ok: false, hasNetwork: false, now: t1), isFalse);
+    expect(watch.bulkMisses, 0);
+  });
 }
