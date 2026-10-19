@@ -88,7 +88,7 @@ dev_dependencies:
   pigeon: ^26.3.4
   flutter_lints: ^6.0.0
   flutter_gen_runner: ^5.14.0
-  ffigen: ^20.1.1
+  ffigen: ^23.0.0
 
 flutter:
   uses-material-design: true
