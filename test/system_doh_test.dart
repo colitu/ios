@@ -48,11 +48,13 @@ void main() {
     expect(ColituSystemDoh.unfiltered, isEmpty);
   });
 
-  test('ad blocking on uses the ad-blocking resolvers, off the unfiltered ones', () async {
+  test('ad blocking on keeps the classic DNS, off uses the panel list', () async {
     await ColituSystemDoh.remember(['https://a.example.com:3443/dns-query/unfiltered']);
     await ColituAdBlock.remember(['https://a.example.com:3443/dns-query']);
     expect(ColituSystemDoh.urlsFor(adBlock: false), ['https://a.example.com:3443/dns-query/unfiltered']);
-    expect(ColituSystemDoh.urlsFor(adBlock: true), ['https://a.example.com:3443/dns-query']);
+    expect(ColituSystemDoh.urlsFor(adBlock: true), isEmpty);
+    await ColituSystemDoh.remember(const []);
+    expect(ColituSystemDoh.urlsFor(adBlock: false), isEmpty);
   });
 
   test('the list survives a restart', () async {

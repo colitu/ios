@@ -436,7 +436,7 @@ final class VpnService {
       keepInside: [tunSettingState.tunDnsIPv4, tunSettingState.tunDnsIPv6],
     );
     // iOS's own DNS over one encrypted connection through the tunnel
-    // (ColituSystemDoh): the ad-blocking resolvers while ad blocking is on.
+    // (ColituSystemDoh): only the panel's list, never with ad blocking on.
     final adBlock =
         ColituAdBlock.available && await PreferencesKey().readColituAdBlock();
     tunSettingState.dohUrls = AppPlatform.isIOS

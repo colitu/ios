@@ -8,8 +8,13 @@ import 'package:colitu_vpn/core/constants/preferences.dart';
 /// extension's memory cap (an iPhone report of 10-17: 83 lookups open at a
 /// memory restart, about 60 % of the core's goroutines).
 ///
-/// With ad blocking on, the ad-blocking resolvers ([ColituAdBlock]); with it
-/// off, the same servers without filtering (bootstrap `dns.doh`). The tunnel
+/// Only the panel's list (bootstrap `dns.doh`, ad blocking off) turns it on;
+/// the panel sends an empty list since 5.9.7. With ad blocking on the system
+/// keeps the classic tunnel DNS and the core filters through the ad-blocking
+/// resolvers: on an iPhone of 10-19 (5.9.4-5.9.6) iOS's own DoH client
+/// resolved nothing for hours on every transport while the extension's
+/// checks of the same resolver through the core passed, so nothing fell
+/// back, and no app traffic left the phone. The tunnel
 /// extension takes the first one that is not the VPN server itself (that
 /// address leaves the tunnel) and falls back to the classic tunnel DNS when
 /// none answers. An empty list keeps the classic DNS.
@@ -23,7 +28,7 @@ class ColituSystemDoh {
 
   /// The resolver URLs for the tunnel start, in order of preference.
   static List<String> urlsFor({required bool adBlock}) =>
-      adBlock ? ColituAdBlock.dohServers : _panel;
+      adBlock ? const [] : _panel;
 
   /// Reads the list the panel sent earlier (at app start).
   static Future<void> load() async {
