@@ -603,16 +603,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
 
     /// The last 2 MB of each requested run file that exists. Names are
     /// single path segments; anything else is ignored.
+    /// macOS system extension only (iOS shares its app group with the app and
+    /// never asks); only the tail is read, never the whole file.
     private func readRunFiles(_ names: [String]) -> [String: Data] {
+        #if os(iOS)
+        return [:]
+        #else
         guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return [:] }
-        let limit = 2 << 20
+        let limit: UInt64 = 2 << 20
         var result: [String: Data] = [:]
         for name in names {
             guard !name.isEmpty, (name as NSString).lastPathComponent == name else { continue }
-            guard let data = try? Data(contentsOf: runDir.adaptedAppendPath(path: name)) else { continue }
-            result[name] = data.count > limit ? data.suffix(limit) : data
+            let url = runDir.adaptedAppendPath(path: name)
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: url.adaptedPath()))?[.size] as? UInt64,
+                  let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            handle.seek(toFileOffset: size > limit ? size - limit : 0)
+            result[name] = handle.readDataToEndOfFile()
+            handle.closeFile()
         }
         return result
+        #endif
     }
 
     // MARK: - dat staging operations
@@ -1918,8 +1928,15 @@ private extension PacketTunnelProvider {
             guard let self = self else { return }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             var lastUp = self.traffic.snapshot().up
+            var loopAt = Date()
             while !Task.isCancelled && self.tunnelShouldRun {
                 let settings = self.keepAliveSettings()
+                // The loop's sleep ran far over: the device slept and this
+                // timer may fire before `wake()` has reset the QUIC session.
+                // A probe now meets the pre-sleep session and fails in
+                // ~150 ms (10-24 report), which also wore out the server
+                // probe; the wake handler probes itself.
+                let resumedFromSleep = Date().timeIntervalSince(loopAt) > settings.interval + 5
                 if self.state != .networkUnavailable, self.reconnectTask == nil, !self.restartingCore {
                     if !self.coreAppearsAlive() {
                         self.keepAliveFailCount += 1
@@ -1942,7 +1959,7 @@ private extension PacketTunnelProvider {
                         // session and probes itself; a probe from here would
                         // meet the pre-sleep session and fail for nothing.
                         let justWoke = self.lastWakeAt.map { Date().timeIntervalSince($0) < Self.wakeProbeGraceSeconds } ?? false
-                        if due, !justWoke {
+                        if due, !justWoke, !resumedFromSleep, self.sleptAt == nil {
                             let reason = active ? "keepalive_active" : "keepalive_idle"
                             let result = await self.confirmTunnelHealth(reason: reason)
                             let aroundWake = self.lastWakeAt.map { Date().timeIntervalSince($0) < 15 } ?? false
@@ -1965,6 +1982,7 @@ private extension PacketTunnelProvider {
                         }
                     }
                 }
+                loopAt = Date()
                 try? await Task.sleep(nanoseconds: UInt64(settings.interval * 1_000_000_000))
             }
         }
@@ -2254,7 +2272,10 @@ private extension PacketTunnelProvider {
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         guard tunnelShouldRun, !Task.isCancelled else { return .skipped }
         let second = await runHealthCheck(reason: reason, target: targets.second, timeout: 6)
-        if second == .success, targets.first.isServerProbe {
+        // Right after a wake the server probe meets the reset QUIC session:
+        // that miss says nothing about the node's probe.
+        let aroundWake = lastWakeAt.map { Date().timeIntervalSince($0) < 15 } ?? false
+        if second == .success, targets.first.isServerProbe, !aroundWake {
             nodeProbeMisses += 1
             if nodeProbeMisses == Self.nodeProbeMissLimit {
                 stabilityLog("node_probe_missing", reason: reason, metadata: ["probeStage": lastServerProbeStage])
@@ -2743,61 +2764,173 @@ private extension PacketTunnelProvider {
 
 /// Colitu Passport minutes. iOS does not keep the app running in the
 /// background, so the tunnel (which runs as long as the VPN is on) writes one
-/// line per connected minute to run/passport_ticks.log: "<epoch ms>,<CC>".
-/// The app replays the lines through the same rules as Android when it comes
-/// to the foreground. The country is the one the app wrote to
-/// run/passport_cc for this connection; nothing else is recorded and the file
-/// never leaves the device. Optional local notifications (new stamp, the
-/// day's pieces) use texts the app prepared in run/passport_notify.json.
+/// line per minute of the VPN session to run/passport_ticks.log:
+/// "<epoch ms>,<CC>". The app replays the lines through the same rules as
+/// Android when it comes to the foreground. The country is the one the app
+/// wrote to run/passport_cc for this connection; nothing else is recorded and
+/// the file never leaves the device.
+///
+/// Minutes are counted on the wall clock, so a phone that sleeps with the VPN
+/// on (the extension is frozen then) is credited the whole minutes it slept,
+/// at most [passportSleepCreditCap] per gap, one line per minute with its own
+/// time. A core restart or a reconnect inside the session does not stop the
+/// count; only an outage longer than [passportOutageLimit] (awake time) does,
+/// and the user turning the VPN off. Every minute costs O(1): the counters
+/// live in a small state file (run/passport_state.json), the log is only
+/// appended to and trimmed from its tail. Optional local notifications (new
+/// stamp, the day's pieces) use texts the app prepared in
+/// run/passport_notify.json.
+private struct PassportState: Codable {
+    var day = ""
+    var dayMinutes = 0
+    var runCountry = ""
+    var runMinutes = 0
+    var lastTs: Int64 = 0
+    var notified: [String] = []
+}
+
 private extension PacketTunnelProvider {
     static let passportTicksName = "passport_ticks.log"
     static let passportCountryName = "passport_cc"
     static let passportNotifyName = "passport_notify.json"
-    static let passportNotifiedName = "passport_notified"
-    /// About four days of continuous use; older lines are dropped.
-    static let passportTicksLimit: UInt64 = 96 << 10
-    /// Uptime of the last written minute; nil while not connected.
-    static var passportAnchor: TimeInterval?
-    static let passportLock = NSLock()
+    static let passportStateName = "passport_state.json"
+    /// About two and a half days of continuous use; older lines are dropped.
+    static let passportTicksLimit: UInt64 = 64 << 10
+    static let passportTicksKeep = 48 << 10
+    /// A reconnect shorter than this (awake seconds) keeps counting.
+    static let passportOutageLimit: TimeInterval = 180
+    /// Two minutes further apart than this start a new run (the app uses the same limit).
+    static let passportRunGapMs: Int64 = 240_000
+    /// Whole minutes a sleep can earn at most (a night with the VPN on is not a night of minutes).
+    static let passportSleepCreditCap: Int64 = 60
 
-    /// Called about once a second by the traffic reporter.
+    /// Wall time (ms) the last counted minute ended; nil outside a VPN session.
+    static var passportLastMs: Int64?
+    /// Uptime when the tunnel stopped carrying traffic; nil while it does.
+    static var passportOutageSince: TimeInterval?
+    static var passportState: PassportState?
+
+    /// Called about once a second by the traffic reporter; touches files once a minute.
     func passportMinute() {
-        let now = ProcessInfo.processInfo.systemUptime
-        Self.passportLock.lock()
-        defer { Self.passportLock.unlock() }
-        // Only a working tunnel counts: not while connecting or reconnecting.
-        guard coreRunning, state == .connected, !restartInProgress else {
-            Self.passportAnchor = nil
+        // The user turned the VPN off: nothing counts, the next session starts fresh.
+        guard tunnelShouldRun, !userInitiatedStop else {
+            Self.passportLastMs = nil
+            Self.passportOutageSince = nil
             return
         }
-        guard let anchor = Self.passportAnchor else {
-            Self.passportAnchor = now
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let working = coreRunning && state == .connected && !restartInProgress
+        if working {
+            Self.passportOutageSince = nil
+        } else {
+            // Uptime stops while the phone sleeps: only awake outage time counts here.
+            let since = Self.passportOutageSince ?? uptime
+            Self.passportOutageSince = since
+            if uptime - since > Self.passportOutageLimit {
+                Self.passportLastMs = nil
+                return
+            }
+        }
+        guard let last = Self.passportLastMs, nowMs >= last else {
+            // Start (or a clock that went backwards): count from now. An
+            // extension restart picks up the run it left a moment ago.
+            if working { Self.passportLastMs = Self.passportResume(nowMs: nowMs) ?? nowMs }
             return
         }
-        guard now - anchor >= 60 else { return }
-        // A late loop (the extension was suspended) still earns one minute only.
-        Self.passportAnchor = now - anchor >= 120 ? now : anchor + 60
+        let minutes = (nowMs - last) / 60_000
+        guard minutes >= 1 else { return }
         guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run"),
               let raw = try? String(contentsOf: runDir.adaptedAppendPath(path: Self.passportCountryName), encoding: .utf8)
         else { return }
         let cc = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard cc.count == 2, cc.unicodeScalars.allSatisfy({ $0.value >= 65 && $0.value <= 90 }) else { return }
-        let ts = Int64(Date().timeIntervalSince1970 * 1000)
-        let url = runDir.adaptedAppendPath(path: Self.passportTicksName)
-        Self.appendPassportLine("\(ts),\(cc)\n", to: url)
-        passportNotify(runDir: runDir, log: url, country: cc)
+        // After a long sleep only the newest minutes count, ending now.
+        let credited = min(minutes, Self.passportSleepCreditCap)
+        let first = minutes > credited ? nowMs - (credited - 1) * 60_000 : last + 60_000
+        let stamps = (0..<credited).map { first + $0 * 60_000 }
+        Self.passportLastMs = minutes > credited ? nowMs : last + minutes * 60_000
+        let lines = stamps.map { "\($0),\(cc)\n" }.joined()
+        Self.appendPassportLine(lines, to: runDir.adaptedAppendPath(path: Self.passportTicksName))
+        let config = (try? Data(contentsOf: runDir.adaptedAppendPath(path: Self.passportNotifyName)))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        var notice: (String, String)?
+        for ts in stamps {
+            let state = Self.advancePassportState(runDir: runDir, country: cc, ts: ts)
+            if let config, let found = Self.passportNotice(config: config, country: cc, state: state) {
+                notice = found
+                if found.0 == "unlock" { Self.passportState?.notified.append(cc) }
+            }
+        }
+        Self.savePassportState(runDir: runDir)
+        // One notification per batch: the latest news.
+        if let notice, let config {
+            let texts = (config["countries"] as? [String: [String: String]])?[cc] ?? [:]
+            let title = notice.0 == "unlock" ? texts["unlockTitle"] : config["pieceTitle"] as? String
+            let body = notice.0 == "unlock" ? texts["unlockBody"] : config["pieceBody"] as? String
+            if let title, let body { postPassportNotification(title: title, body: body) }
+        }
     }
 
+    /// The end of the run the previous extension process left, when it is
+    /// recent enough to continue (iOS restarted the extension).
+    static func passportResume(nowMs: Int64) -> Int64? {
+        guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return nil }
+        let state = passportState ?? loadPassportState(runDir: runDir)
+        passportState = state
+        guard state.lastTs > 0, nowMs - state.lastTs >= 0, nowMs - state.lastTs <= passportRunGapMs else { return nil }
+        return state.lastTs
+    }
+
+    static func loadPassportState(runDir: URL) -> PassportState {
+        (try? Data(contentsOf: runDir.adaptedAppendPath(path: passportStateName)))
+            .flatMap { try? JSONDecoder().decode(PassportState.self, from: $0) } ?? PassportState()
+    }
+
+    static func savePassportState(runDir: URL) {
+        guard let state = passportState, let data = try? JSONEncoder().encode(state) else { return }
+        try? data.write(to: runDir.adaptedAppendPath(path: passportStateName), options: .atomic)
+    }
+
+    /// The day's minutes and the current run after one more minute ending at [ts].
+    static func advancePassportState(runDir: URL, country: String, ts: Int64) -> PassportState {
+        var state = passportState ?? loadPassportState(runDir: runDir)
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let day = formatter.string(from: Date(timeIntervalSince1970: TimeInterval(ts) / 1000))
+        if state.day != day {
+            state.day = day
+            state.dayMinutes = 0
+        }
+        state.dayMinutes += 1
+        let gap = ts - state.lastTs
+        if state.runCountry == country, gap >= 1, gap <= passportRunGapMs {
+            state.runMinutes += 1
+        } else {
+            state.runCountry = country
+            state.runMinutes = 1
+        }
+        state.lastTs = ts
+        passportState = state
+        return state
+    }
+
+    /// Appends lines; past the limit only the newest part is kept, read
+    /// from the end of the file (never the whole file).
     static func appendPassportLine(_ line: String, to url: URL) {
         guard let data = line.data(using: .utf8) else { return }
         let path = url.adaptedPath()
         if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? UInt64,
            size > passportTicksLimit,
-           let old = try? Data(contentsOf: url) {
-            // Keep the newer half, starting at a whole line.
-            var tail = old.suffix(Int(passportTicksLimit / 2))
-            if let newline = tail.firstIndex(of: 10) { tail = tail[(newline + 1)...] }
-            try? Data(tail).write(to: url, options: .atomic)
+           let reader = try? FileHandle(forReadingFrom: url) {
+            reader.seek(toFileOffset: size - UInt64(passportTicksKeep))
+            var tail = reader.readData(ofLength: passportTicksKeep)
+            reader.closeFile()
+            // Start at a whole line.
+            if let newline = tail.firstIndex(of: 10) { tail = tail.subdata(in: (newline + 1)..<tail.endIndex) }
+            try? tail.write(to: url, options: .atomic)
         }
         if FileManager.default.fileExists(atPath: path), let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
@@ -2808,46 +2941,19 @@ private extension PacketTunnelProvider {
         }
     }
 
-    /// Posts the passport notification for this minute, if any: a new stamp
-    /// after five minutes in a row in a country without one, a piece at the
-    /// day's 10th and 60th minute (every 10th for tester accounts).
-    func passportNotify(runDir: URL, log: URL, country: String) {
-        guard let data = try? Data(contentsOf: runDir.adaptedAppendPath(path: Self.passportNotifyName)),
-              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (config["on"] as? Bool) == true,
-              let text = try? String(contentsOf: log, encoding: .utf8) else { return }
-        let ticks: [(Int64, String)] = text.split(separator: "\n").compactMap { line in
-            let parts = line.split(separator: ",")
-            guard parts.count == 2, let ts = Int64(parts[0]) else { return nil }
-            return (ts, String(parts[1]))
-        }
-        let dayStart = Int64(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970 * 1000)
-        let dayMinutes = ticks.filter { $0.0 >= dayStart }.count
-        var run = 0
-        var next: Int64?
-        for tick in ticks.reversed() {
-            guard tick.1 == country else { break }
-            if let later = next, later - tick.0 > 90_000 { break }
-            run += 1
-            next = tick.0
-        }
-        let countries = config["countries"] as? [String: [String: String]] ?? [:]
-        let texts = countries[country] ?? [:]
-        if run == 5, (config["locked"] as? [String])?.contains(country) == true,
-           let title = texts["unlockTitle"], let body = texts["unlockBody"] {
-            let marker = runDir.adaptedAppendPath(path: Self.passportNotifiedName)
-            let done = (try? String(contentsOf: marker, encoding: .utf8)) ?? ""
-            if !done.split(separator: ",").contains(Substring(country)) {
-                try? (done.isEmpty ? country : done + "," + country).write(to: marker, atomically: true, encoding: .utf8)
-                postPassportNotification(title: title, body: body)
-                return
-            }
+    /// The news of one minute, if any: "unlock" after five minutes in a row
+    /// in a country without a stamp, "piece" at the day's 10th and 60th
+    /// minute (every 10th for tester accounts).
+    static func passportNotice(config: [String: Any], country: String, state: PassportState) -> (String, String)? {
+        guard (config["on"] as? Bool) == true else { return nil }
+        if state.runMinutes == 5, (config["locked"] as? [String])?.contains(country) == true,
+           !state.notified.contains(country) {
+            return ("unlock", country)
         }
         let tester = (config["tester"] as? Bool) == true
-        let earns = tester ? dayMinutes % 10 == 0 : (dayMinutes == 10 || dayMinutes == 60)
-        if earns, let title = config["pieceTitle"] as? String, let body = config["pieceBody"] as? String {
-            postPassportNotification(title: title, body: body)
-        }
+        let minutes = state.dayMinutes
+        let earns = tester ? minutes % 10 == 0 : (minutes == 10 || minutes == 60)
+        return earns ? ("piece", country) : nil
     }
 
     func postPassportNotification(title: String, body: String) {

@@ -48,11 +48,13 @@ class TunnelDiagnosticsService {
         'Core error log, earlier sessions',
         p.join(dir, 'error.prev.log'),
         maxBytes: 32 << 10,
+        filter: dropPortHopNoise,
       ),
       await _section(
         'Core error log, current session',
         p.join(dir, XrayStateConstants.errorLog),
         maxBytes: 48 << 10,
+        filter: dropPortHopNoise,
       ),
       await _section(
         'Core goroutines at the last memory restart (goroutines.txt)',
@@ -86,7 +88,30 @@ class TunnelDiagnosticsService {
   }
 
   /// One titled section with the end of [path] (the newest records).
-  Future<String> _section(String title, String path, {int maxBytes = 32 << 10}) async {
+  /// Hysteria2 port hopping closes its UDP socket on every hop (every
+  /// 30 s); the receive loop then logs a read on a closed socket. Harmless,
+  /// and it buried the real core errors: left out, with a count.
+  @visibleForTesting
+  static String dropPortHopNoise(String text) {
+    var dropped = 0;
+    final kept = <String>[];
+    for (final line in text.split('\n')) {
+      if (line.contains('finalmask/udphop: recv err') && line.contains('use of closed network connection')) {
+        dropped++;
+      } else {
+        kept.add(line);
+      }
+    }
+    if (dropped == 0) return text;
+    return '${kept.join('\n')}\n($dropped port-hop socket closings left out)';
+  }
+
+  Future<String> _section(
+    String title,
+    String path, {
+    int maxBytes = 32 << 10,
+    String Function(String text)? filter,
+  }) async {
     final header = '===== $title =====';
     final file = File(path);
     try {
@@ -103,6 +128,7 @@ class TunnelDiagnosticsService {
           final newline = text.indexOf('\n');
           text = '(… ${start >> 10} KB earlier omitted)\n${newline >= 0 ? text.substring(newline + 1) : text}';
         }
+        if (filter != null) text = filter(text);
         // The report can be shared anywhere: no credentials or e-mails in it.
         return '$header\n${text.trim().isEmpty ? '(empty)' : LogRedaction.redact(text.trimRight())}';
       } finally {

@@ -43,6 +43,22 @@ void main() {
     expect(report, contains('===== Core error log, current session =====\n(none)'));
   });
 
+  test('port-hop socket closings are left out of the core errors, real errors stay', () async {
+    const noise = '2026/10/24 15:41:16.035457 [Error] transport/internet/finalmask/udphop: '
+        'recv err > read udp [::]:65074: use of closed network connection';
+    const real = '2026/10/24 15:42:54.536166 [Error] app/dns: failed to resolve';
+    await File(p.join(runDir.path, 'error.log')).writeAsString([noise, real, noise].join('\n'));
+
+    final report = await TunnelDiagnosticsService().buildReport(runDir: runDir.path);
+
+    expect(report, isNot(contains('udphop: recv err')));
+    expect(report, contains('app/dns: failed to resolve'));
+    expect(report, contains('(2 port-hop socket closings left out)'));
+    // A fresh report each time: the running app's version and the current time.
+    expect(report, contains('Build number: 22'));
+    expect(report, contains('Report time: ${DateTime.now().toIso8601String().substring(0, 13)}'));
+  });
+
   test('earlier sessions move to a bounded history instead of being erased', () async {
     final log = p.join(runDir.path, 'stability_log.jsonl');
     final history = p.join(runDir.path, 'stability_log.prev.jsonl');

@@ -311,6 +311,13 @@ class ColituPassport extends ChangeNotifier {
   static const pieceMinutes = [10, 60];
   static const testerEvery = 10;
 
+  /// Two minutes further apart than this start a new run. Android's VPN
+  /// service ticks every minute through core restarts and reconnects; the
+  /// iOS tunnel keeps counting through outages up to three minutes but can
+  /// itself be restarted by iOS, so up to four minutes between two lines
+  /// still count as one run (the tunnel uses the same limit).
+  static const runGapMs = 240000;
+
   static List<ColituStamp> _chapter(List<String> codes, int first) => [
     for (var i = 0; i < codes.length; i++) ColituStamp(codes[i], first + i),
   ];
@@ -427,10 +434,10 @@ class ColituPassport extends ChangeNotifier {
       store.setInt('day_min', 0);
       store.setInt('day_pieces', 0);
     }
-    // Minutes in a row in one country; a gap over 90 s or another country starts over.
+    // Minutes in a row in one country; a gap over [runGapMs] or another country starts over.
     final last = store.getInt('last_tick');
     final gap = t - last;
-    final sameRun = store.getString('run_cc') == code && gap >= 1 && gap <= 90000;
+    final sameRun = store.getString('run_cc') == code && gap >= 1 && gap <= runGapMs;
     final run = sameRun ? store.getInt('run_min') + 1 : 1;
     store.setString('run_cc', code);
     store.setInt('run_min', run);

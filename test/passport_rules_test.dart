@@ -37,14 +37,44 @@ void main() {
       expect(p.count, 1);
     });
 
-    test('a gap over 90 s or another country starts the run again', () {
+    test('a gap over four minutes or another country starts the run again', () {
       run('DE', 3);
-      p.tick('DE', at: at(3) + 120000); // two minutes later: new run
-      run('DE', 3, start: 5);
+      p.tick('DE', at: at(8)); // five minutes later: new run
+      run('DE', 3, start: 8);
       expect(p.progressOf('DE').unlocked, isFalse);
-      run('FR', 2, start: 8);
-      expect(p.tick('DE', at: at(11)), isEmpty);
+      run('FR', 2, start: 11);
+      expect(p.tick('DE', at: at(14)), isEmpty);
       expect(p.store.getInt('run_min'), 1);
+    });
+
+    test('a core restart or reconnect inside the session keeps the run', () {
+      // Two minutes, then the tunnel restarts (iOS killed it at its memory
+      // cap): the next line comes 3.5 minutes later, then three more.
+      p.tick('SE', at: at(1));
+      p.tick('SE', at: at(2));
+      final back = at(2) + 210000;
+      expect(p.tick('SE', at: back), isEmpty);
+      expect(p.tick('SE', at: back + 60000), isEmpty);
+      expect(p.tick('SE', at: back + 120000), [const StampEvent.unlocked('SE')]);
+      expect(p.store.getInt('run_min'), 5);
+    });
+
+    test('memory restarts every few minutes still unlock and replay from the log', () {
+      // XHTTP on 5.9.9: a restart every 3-5 minutes, each one costing a
+      // minute or two without a line.
+      final lines = <String>[];
+      var t = at(0);
+      for (var i = 0; i < 4; i++) {
+        for (var m = 0; m < 2; m++) {
+          t += 60000;
+          lines.add('$t,NL');
+        }
+        t += 150000;
+      }
+      now = DateTime.fromMillisecondsSinceEpoch(t);
+      expect(PassportTickLog.replay(p, lines.join('\n')), 8);
+      expect(p.progressOf('NL').unlocked, isTrue);
+      expect(p.progressOf('NL').minutes, 8);
     });
 
     test('UK is Great Britain; junk codes are ignored', () {
@@ -94,6 +124,17 @@ void main() {
       }
       expect(p.progress, isEmpty);
       expect(p.today, (12, 0));
+    });
+
+    test('reconnects do not lift the daily cap', () {
+      // 150 minutes with a reconnect gap after every five.
+      var t = at(0);
+      for (var i = 1; i <= 150; i++) {
+        t += i % 5 == 0 ? 200000 : 60000;
+        p.tick('PL', at: t);
+      }
+      expect(p.today, (150, 2));
+      expect(p.progressOf('PL').pieces, 2);
     });
 
     test('tester accounts: a piece every 10 minutes without the cap', () {
