@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
@@ -76,7 +77,10 @@ void main() {
   group('controller', () {
     test('skips measuring while connected and keeps the direct reading', () async {
       final server = _server('de');
-      final c = ColituConnectionController()..servers = [server];
+      // No tunnel extension to ask (as on Android/desktop builds).
+      final c = ColituConnectionController()
+        ..servers = [server]
+        ..tunnelLatencyProbe = null;
       addTearDown(c.dispose);
       var calls = 0;
       var answer = 40;
@@ -112,6 +116,155 @@ void main() {
     });
   });
 
+  group('measureAllOutside', () {
+    Future<InternetAddress?> fakeResolve(String host) async {
+      if (host.startsWith('dead')) return null;
+      final n =
+          int.tryParse(host.split('.').first.replaceAll(RegExp(r'\D'), '')) ??
+          0;
+      return InternetAddress('203.0.113.${n % 250 + 1}');
+    }
+
+    test(
+      'one connect per address, 40 per request, results by server',
+      () async {
+        final servers = [
+          for (var i = 0; i < 45; i++) _server('s$i'),
+          // Same probe host as s1: measured once, reported for both.
+          VPNServer(
+            id: 'twin',
+            name: 'twin',
+            country: 'DE',
+            status: 'online',
+            available: true,
+            locked: false,
+            isPremium: false,
+            isFree: true,
+            isRecommended: false,
+            host: 's1.example.test',
+            port: 443,
+          ),
+          _server('dead1'),
+        ];
+        final batches = <int>[];
+        final measured = await ServerLatency.measureAllOutside(
+          servers,
+          resolve: fakeResolve,
+          send: (targets) async {
+            batches.add(targets.length);
+            return [
+              for (final t in targets) int.parse(t.address.split('.').last),
+            ];
+          },
+        );
+        expect(batches, [40, 5]);
+        expect(measured['s1'], 2);
+        expect(measured['twin'], 2);
+        expect(measured['s44'], 45);
+        // A probe name that does not resolve counts as failed, as off-VPN.
+        expect(measured.containsKey('dead1'), isTrue);
+        expect(measured['dead1'], isNull);
+      },
+    );
+
+    test('no answer from the extension: nothing measured', () async {
+      final measured = await ServerLatency.measureAllOutside(
+        [_server('s1'), _server('s2')],
+        resolve: fakeResolve,
+        send: (targets) async => null,
+      );
+      expect(measured, isEmpty);
+    });
+
+    test(
+      'a failed connect is null, a later batch without answer is left out',
+      () async {
+        final servers = [for (var i = 0; i < 41; i++) _server('s$i')];
+        var call = 0;
+        final measured = await ServerLatency.measureAllOutside(
+          servers,
+          resolve: fakeResolve,
+          send: (targets) async {
+            call++;
+            if (call == 2) throw StateError('extension gone');
+            return [
+              for (final t in targets) t.address.endsWith('.1') ? null : 30,
+            ];
+          },
+        );
+        expect(measured['s0'], isNull);
+        expect(measured.containsKey('s0'), isTrue);
+        expect(measured['s5'], 30);
+        expect(measured.containsKey('s40'), isFalse);
+      },
+    );
+  });
+
+  group('controller while connected', () {
+    test(
+      'the extension measures outside the tunnel, at most every 30 s',
+      () async {
+        final server = _server('de');
+        final c = ColituConnectionController()
+          ..servers = [server]
+          ..latencyResolver = (host) async => InternetAddress('203.0.113.7');
+        addTearDown(c.dispose);
+        var direct = 0;
+        c.latencyProbe = (host, port) async {
+          direct++;
+          return 40;
+        };
+        var sent = <TunnelLatencyTarget>[];
+        var asked = 0;
+        c.tunnelLatencyProbe = (targets) async {
+          asked++;
+          sent = targets;
+          return [55];
+        };
+
+        await c.measurePings();
+        expect(c.pingOf(server), 40);
+
+        c.status = ColituVpnStatus.connecting;
+        await c.measurePings();
+        expect(asked, 0, reason: 'nothing is measured while connecting');
+        expect(c.pingsPaused, isTrue);
+
+        c.status = ColituVpnStatus.connected;
+        await c.measurePings();
+        expect(asked, 1);
+        expect(direct, 1, reason: 'the app never dials through the tunnel');
+        expect(sent.single.address, '203.0.113.7');
+        expect(sent.single.port, 443);
+        expect(c.pingOf(server), 55);
+        expect(c.pingsPaused, isFalse);
+
+        await c.measurePings();
+        expect(asked, 1, reason: 'rate limited');
+        expect(c.pingOf(server), 55);
+      },
+    );
+
+    test(
+      'no answer from the extension keeps the last reading and says so',
+      () async {
+        final server = _server('de');
+        final c = ColituConnectionController()
+          ..servers = [server]
+          ..latencyResolver = (host) async => InternetAddress('203.0.113.7');
+        addTearDown(c.dispose);
+        c.latencyProbe = (host, port) async => 40;
+        c.tunnelLatencyProbe = (targets) async => null;
+
+        await c.measurePings();
+        c.status = ColituVpnStatus.connected;
+        await c.measurePings();
+        expect(c.pingOf(server), 40);
+        expect(c.pingsPaused, isTrue);
+      },
+    );
+  });
+
   group('LocationsTab', () {
     testWidgets('shows the cached-ping hint while connected and measures '
         'again once disconnected', (tester) async {
@@ -121,6 +274,7 @@ void main() {
       final c = ColituConnectionController()
         ..loading = false
         ..servers = [_server('de')]
+        ..tunnelLatencyProbe = null
         ..status = ColituVpnStatus.connected;
       var calls = 0;
       c.latencyProbe = (host, port) async {

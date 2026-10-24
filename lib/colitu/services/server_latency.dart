@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
+import 'package:flutter/services.dart';
 
 /// Ping of a location: the TCP connect time to the node's latency probe
 /// address (the panel's latency_host / latency_port), best of two tries, like
 /// the Windows and Android apps. Only measured while the VPN is off: on iOS
 /// the app's own sockets go through the tunnel while it is up, so the number
 /// would describe the tunnel plus the path between two nodes. While the VPN
-/// is up (or starting) the list shows the last direct reading instead.
+/// is connected the tunnel extension times the connects instead (its own
+/// sockets stay outside the tunnel, see [measureAllOutside]); while it is
+/// starting or stopping, or the extension does not answer, the list shows
+/// the last direct reading.
 class ServerLatency {
   static const _timeout = Duration(milliseconds: 2500);
 
@@ -52,6 +57,7 @@ class ServerLatency {
   static Future<InternetAddress?> resolvePublic(
     String host, {
     Future<List<InternetAddress>> Function(String host)? lookup,
+    bool preferIPv4 = false,
   }) async {
     List<InternetAddress> found;
     try {
@@ -65,6 +71,12 @@ class ServerLatency {
     // partly) into loopback, private, CGNAT or link-local space is never
     // dialled.
     if (!found.every(isPublic)) return null;
+    if (preferIPv4) {
+      return found.firstWhere(
+        (a) => a.type == InternetAddressType.IPv4,
+        orElse: () => found.first,
+      );
+    }
     return found.first;
   }
 
@@ -168,5 +180,130 @@ class ServerLatency {
       for (var i = 0; i < concurrency && i < targets.length; i++) worker(),
     ]);
     return results;
+  }
+
+  /// Addresses per request to the tunnel extension (it measures at most
+  /// this many at a time).
+  static const tunnelBatch = 40;
+
+  /// Pings while the VPN is connected, timed by the tunnel extension: its
+  /// own sockets never enter the tunnel (with the strict kill switch too),
+  /// so the number is this device's direct path to the node, as with the
+  /// VPN off. The app resolves the probe names (while the tunnel is up its
+  /// DNS answers, so no poisoned addresses; the lookup is not timed) and
+  /// sends literal addresses, [tunnelBatch] at a time; [send] returns the
+  /// milliseconds in order (null = no answer), or null when the extension
+  /// did not answer at all. Empty when nothing was measured: the caller
+  /// keeps the last readings.
+  static Future<Map<String, int?>> measureAllOutside(
+    List<VPNServer> servers, {
+    required Future<List<int?>?> Function(List<TunnelLatencyTarget> targets)
+    send,
+    Future<InternetAddress?> Function(String host)? resolve,
+  }) async {
+    final targets = probeTargets(servers);
+    final hosts = {for (final server in targets) server.host!}.toList();
+    final resolver = resolve ?? (host) => resolvePublic(host, preferIPv4: true);
+    final resolved = <String, InternetAddress?>{};
+    var next = 0;
+    Future<void> worker() async {
+      while (next < hosts.length) {
+        final host = hosts[next++];
+        try {
+          resolved[host] = await resolver(host);
+        } catch (_) {
+          resolved[host] = null;
+        }
+      }
+    }
+
+    await Future.wait([
+      for (var i = 0; i < concurrency && i < hosts.length; i++) worker(),
+    ]);
+    // One connect per address and port, however many servers share it.
+    final unique = <String, TunnelLatencyTarget>{};
+    for (final server in targets) {
+      final address = resolved[server.host!];
+      if (address == null) continue;
+      final target = TunnelLatencyTarget(address.address, server.port!);
+      unique[target.key] = target;
+    }
+    if (unique.isEmpty) return const {};
+    final list = unique.values.toList();
+    final ms = <String, int?>{};
+    for (var i = 0; i < list.length; i += tunnelBatch) {
+      final batch = list.sublist(i, math.min(i + tunnelBatch, list.length));
+      List<int?>? answer;
+      try {
+        answer = await send(batch);
+      } catch (_) {
+        answer = null;
+      }
+      // No answer: what was measured so far stands, the rest is not judged.
+      if (answer == null || answer.length != batch.length) break;
+      for (var j = 0; j < batch.length; j++) {
+        ms[batch[j].key] = answer[j];
+      }
+    }
+    if (ms.isEmpty) return const {};
+    return {
+      for (final server in targets)
+        if (resolved[server.host!] == null)
+          server.selectionKey: null
+        else if (ms.containsKey(
+          TunnelLatencyTarget(
+            resolved[server.host!]!.address,
+            server.port!,
+          ).key,
+        ))
+          server.selectionKey:
+              ms[TunnelLatencyTarget(
+                resolved[server.host!]!.address,
+                server.port!,
+              ).key],
+    };
+  }
+}
+
+/// One address the tunnel extension times a TCP connect to.
+class TunnelLatencyTarget {
+  const TunnelLatencyTarget(this.address, this.port);
+
+  final String address;
+  final int port;
+
+  String get key => '$address|$port';
+
+  Map<String, Object> toJson() => {'address': address, 'port': port};
+}
+
+/// The app's line to the tunnel extension for pings while the VPN is up
+/// (iOS and the macOS app; the extension answers over its provider message
+/// channel).
+class TunnelLatency {
+  static const _channel = MethodChannel('colitu/tunnel');
+
+  /// Longest wait for one request: 40 addresses, 6 at a time, 2 s each.
+  static const _timeout = Duration(seconds: 25);
+
+  /// The probe on this platform; null where no tunnel extension exists.
+  static Future<List<int?>?> Function(List<TunnelLatencyTarget> targets)?
+  get platformProbe => Platform.isIOS || Platform.isMacOS ? measure : null;
+
+  static Future<List<int?>?> measure(List<TunnelLatencyTarget> targets) async {
+    try {
+      final raw = await _channel
+          .invokeMethod<List<Object?>>('measureLatency', [
+            for (final target in targets) target.toJson(),
+          ])
+          .timeout(_timeout);
+      if (raw == null || raw.length != targets.length) return null;
+      return [
+        for (final value in raw)
+          value is int && value >= 0 ? value.clamp(1, 1 << 20) : null,
+      ];
+    } catch (_) {
+      return null;
+    }
   }
 }

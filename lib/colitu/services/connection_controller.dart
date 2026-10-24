@@ -3237,9 +3237,27 @@ class ColituConnectionController extends ChangeNotifier
   @visibleForTesting
   Future<int?> Function(String host, int port)? latencyProbe;
 
+  /// Pings while connected, timed by the tunnel extension outside the
+  /// tunnel; null where there is none. Tests swap in a fake.
+  @visibleForTesting
+  Future<List<int?>?> Function(List<TunnelLatencyTarget> targets)?
+  tunnelLatencyProbe = TunnelLatency.platformProbe;
+
+  /// Resolver of the probe names for [tunnelLatencyProbe]; tests swap in a fake.
+  @visibleForTesting
+  Future<InternetAddress?> Function(String host)? latencyResolver;
+
+  /// While connected the extension is asked at most this often.
+  static const tunnelPingEvery = Duration(seconds: 30);
+  DateTime? _tunnelPingAt;
+
+  /// The extension answered the last time it was asked.
+  var _tunnelPingsOk = false;
+
   /// Ping of [server]: the last direct reading on this network (at most
   /// [ServerLatency.shownFor] old), else whatever the panel sent. While the
-  /// VPN is up nothing new is measured, so this is the reading from before.
+  /// VPN is connected the tunnel extension measures outside the tunnel; if
+  /// it cannot, this is the reading from before.
   int? pingOf(VPNServer server) =>
       ServerLatency.shownPing(
         _pings[server.selectionKey],
@@ -3248,11 +3266,18 @@ class ColituConnectionController extends ChangeNotifier
       ) ??
       server.ping;
 
-  /// No ping is measured now (the tunnel is up, starting or stopping): the
-  /// list shows the last direct readings.
-  bool get pingsPaused => status != ColituVpnStatus.disconnected;
+  /// No ping is measured now (the tunnel is starting or stopping, or it is
+  /// up and its extension does not measure): the list shows the last direct
+  /// readings.
+  bool get pingsPaused =>
+      status != ColituVpnStatus.disconnected &&
+      !(status == ColituVpnStatus.connected &&
+          tunnelLatencyProbe != null &&
+          _tunnelPingsOk);
 
-  /// Re-measures the pings unless a tunnel is up or starting.
+  /// Re-measures the pings: directly with the VPN off, through the tunnel
+  /// extension (outside the tunnel) while it is connected, not at all while
+  /// it is starting or stopping.
   Future<void> measurePings() async {
     if (!_pingsLoaded) {
       _pingsLoaded = true;
@@ -3266,7 +3291,17 @@ class ColituConnectionController extends ChangeNotifier
         }
       } catch (_) {}
     }
-    if (pingsPaused) {
+    final tunnelProbe = tunnelLatencyProbe;
+    if (status == ColituVpnStatus.connected && tunnelProbe != null) {
+      final last = _tunnelPingAt;
+      if (_pingRun == null &&
+          (last == null || DateTime.now().difference(last) >= tunnelPingEvery)) {
+        _tunnelPingAt = DateTime.now();
+        await _measureOutsideTunnel(tunnelProbe);
+        return;
+      }
+    }
+    if (status != ColituVpnStatus.disconnected) {
       // Nothing is dialled. Only the link kind is read (local interfaces)
       // so a launch with the tunnel already up still shows this network's
       // last readings.
@@ -3287,21 +3322,7 @@ class ColituConnectionController extends ChangeNotifier
         probe: latencyProbe,
       );
       if (measured.isEmpty || status != ColituVpnStatus.disconnected) return;
-      final at = DateTime.now();
-      _pings = {
-        ..._pings,
-        for (final entry in measured.entries)
-          entry.key: ColituPing(ms: entry.value, at: at, network: network),
-      };
-      // Latency events: nodes only (a route's ping is its entry node's).
-      for (final server in servers) {
-        if (server.isMultihop || !measured.containsKey(server.selectionKey)) {
-          continue;
-        }
-        _telemetry.probe(server.id, measured[server.selectionKey]);
-      }
-      _notify();
-      await PreferencesKey().saveColituServerPings(ColituPing.encodeAll(_pings));
+      await _storePings(measured, network);
     }();
     _pingRun = run;
     try {
@@ -3310,6 +3331,60 @@ class ColituConnectionController extends ChangeNotifier
     } finally {
       _pingRun = null;
     }
+  }
+
+  /// One run while connected: the extension times the connects from its
+  /// own sockets, outside the tunnel. When it does not answer, the list
+  /// keeps the last direct readings (and says so).
+  Future<void> _measureOutsideTunnel(
+    Future<List<int?>?> Function(List<TunnelLatencyTarget> targets) probe,
+  ) async {
+    final list = [...servers, ...multihopServers];
+    final run = () async {
+      try {
+        await _refreshNetwork();
+      } catch (_) {}
+      final network = networkKey;
+      final measured = await ServerLatency.measureAllOutside(
+        list,
+        send: probe,
+        resolve: latencyResolver,
+      );
+      if (status != ColituVpnStatus.connected) return;
+      final wasOk = _tunnelPingsOk;
+      _tunnelPingsOk = measured.isNotEmpty;
+      if (measured.isEmpty) {
+        if (wasOk) _notify();
+        return;
+      }
+      await _storePings(measured, network);
+    }();
+    _pingRun = run;
+    try {
+      await run;
+    } catch (_) {
+    } finally {
+      _pingRun = null;
+    }
+  }
+
+  /// Fresh readings into the shown pings and the stored cache.
+  Future<void> _storePings(Map<String, int?> measured, String network) async {
+    final at = DateTime.now();
+    _pings = {
+      ..._pings,
+      for (final entry in measured.entries)
+        entry.key: ColituPing(ms: entry.value, at: at, network: network),
+    };
+    // Latency events: nodes only (a route's ping is its entry node's).
+    for (final server in servers) {
+      if (server.isMultihop || !measured.containsKey(server.selectionKey)) {
+        continue;
+      }
+      _telemetry.probe(server.id, measured[server.selectionKey]);
+    }
+    _notify();
+    await PreferencesKey().saveColituServerPings(ColituPing.encodeAll(_pings));
   }
 }
 

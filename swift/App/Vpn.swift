@@ -703,6 +703,19 @@ class VPNManager {
         throw VPNError.sessionNotReady
     }
 
+    /// Pings while the VPN is up, timed by the extension outside the tunnel
+    /// (see `DirectLatency`): ms per target, -1 for no answer. nil when no
+    /// tunnel is connected or it did not answer (an older extension).
+    func measureLatency(_ targets: [LatencyTarget]) async -> [Int]? {
+        await refreshVpn()
+        guard let session = vpn?.connection as? NETunnelProviderSession, session.status == .connected,
+              case let .latency(ms)? = try? await sendTunnelRequest(session: session, .measureLatency(targets: targets)),
+              ms.count == targets.count else {
+            return nil
+        }
+        return ms
+    }
+
     private func sendTunnelRequest(session: NETunnelProviderSession, _ request: TunnelRequest) async throws -> TunnelResponse {
         let data = try TunnelMessageCoder.encode(request)
         return try await withCheckedThrowingContinuation { continuation in

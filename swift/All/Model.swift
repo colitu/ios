@@ -109,6 +109,15 @@ enum TunnelRequest: Codable {
     /// heartbeat, drops, stability log) live in root's group container; the
     /// app copies them into its own container for the Flutter side.
     case readRunFiles(names: [String])
+    /// Pings while the VPN is up: the extension times TCP connects to these
+    /// addresses from its own sockets, which never enter the tunnel.
+    case measureLatency(targets: [LatencyTarget])
+}
+
+/// One ping target: an address the app resolved (a literal) and a probe port.
+struct LatencyTarget: Codable {
+    let address: String
+    let port: Int
 }
 
 enum TunnelResponse: Codable {
@@ -116,6 +125,8 @@ enum TunnelResponse: Codable {
     case datManifest([String: Int64])
     case error(String)
     case runFiles([String: Data])
+    /// Milliseconds per target of `measureLatency`, in order; -1 = no answer.
+    case latency([Int])
 }
 
 enum TunnelMessageCoder {

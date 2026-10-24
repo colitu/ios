@@ -534,9 +534,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     }
 
     override func handleAppMessage(_ messageData: Data) async -> Data? {
-        if let request = try? TunnelMessageCoder.decode(TunnelRequest.self, from: messageData),
-           case .reloadCore = request {
+        let request = try? TunnelMessageCoder.decode(TunnelRequest.self, from: messageData)
+        if case .reloadCore? = request {
             return try? TunnelMessageCoder.encode(reloadCoreFromApp())
+        }
+        if case let .measureLatency(targets)? = request {
+            return try? TunnelMessageCoder.encode(await DirectLatency.measure(targets))
         }
         if Constants.useSystemExtension {
             return handleAppMessageSE(messageData)
@@ -585,6 +588,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             response = writeCoreConfig(content) ? .ok : .error("write xray.json")
         case let .readRunFiles(names):
             response = .runFiles(readRunFiles(names))
+        case .measureLatency:
+            response = .error("unexpected")
         }
         return try? TunnelMessageCoder.encode(response)
     }
@@ -2963,6 +2968,145 @@ private extension PacketTunnelProvider {
         content.userInfo = ["colitu_passport": true]
         let request = UNNotificationRequest(identifier: "colitu.passport", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+}
+
+// MARK: - Pings while the VPN is up
+
+/// The app's server pings while the tunnel is up. Sockets the extension
+/// opens never enter its own tunnel (with the strict kill switch,
+/// `includeAllNetworks`, as well: the provider's traffic stays exempt), so a
+/// TCP connect from here times the device's direct path to the node, as the
+/// app does with the VPN off. The app resolves the probe names and sends
+/// literal addresses: no DNS here. Light by design: TCP connect only, a
+/// 2 s timeout, at most 6 at once and 40 per request, one request at a time,
+/// on its own queue (never the provider's or the packet path).
+enum DirectLatency {
+    static let maxTargets = 40
+    static let parallel = 6
+    static let timeout: TimeInterval = 2
+    /// The nodes' probe ports (the app's list): nothing else is dialled.
+    static let allowedPorts: Set<Int> = [443, 2053, 2083, 2087, 2096, 3443, 4433, 7443, 8388, 8443, 9443]
+    private static let queue = DispatchQueue(label: "colitu.direct-latency", qos: .utility, attributes: .concurrent)
+    private static let lock = NSLock()
+    private static var running = false
+
+    static func measure(_ targets: [LatencyTarget]) async -> TunnelResponse {
+        lock.lock()
+        if running {
+            lock.unlock()
+            return .error("busy")
+        }
+        running = true
+        lock.unlock()
+        let list = Array(targets.prefix(maxTargets))
+        let results: [Int] = await withCheckedContinuation { continuation in
+            queue.async {
+                let found = Results(count: list.count)
+                let gate = DispatchSemaphore(value: parallel)
+                let group = DispatchGroup()
+                for (index, target) in list.enumerated() {
+                    gate.wait()
+                    group.enter()
+                    queue.async {
+                        defer {
+                            gate.signal()
+                            group.leave()
+                        }
+                        found.set(index, bestOfTwo(target) ?? -1)
+                    }
+                }
+                group.wait()
+                continuation.resume(returning: found.values)
+            }
+        }
+        lock.lock()
+        running = false
+        lock.unlock()
+        // Targets past the cap get no answer.
+        return .latency(results + [Int](repeating: -1, count: targets.count - list.count))
+    }
+
+    private final class Results: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [Int]
+        init(count: Int) { stored = [Int](repeating: -1, count: count) }
+        func set(_ index: Int, _ value: Int) {
+            lock.lock()
+            stored[index] = value
+            lock.unlock()
+        }
+        var values: [Int] {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+    }
+
+    /// Best of two connects, like the app; a first try that fails is not
+    /// repeated (it would only spend another timeout).
+    static func bestOfTwo(_ target: LatencyTarget) -> Int? {
+        guard allowedPorts.contains(target.port), let first = connectMs(target.address, port: target.port) else {
+            return nil
+        }
+        guard let second = connectMs(target.address, port: target.port) else { return first }
+        return min(first, second)
+    }
+
+    /// TCP connect time to a literal address in ms; nil on failure, timeout,
+    /// or an address that is not public. Blocking.
+    static func connectMs(_ address: String, port: Int) -> Int? {
+        var hints = addrinfo()
+        // A literal: no lookup. On an IPv6-only network iOS synthesises the
+        // NAT64 address of an IPv4 literal here.
+        hints.ai_flags = AI_NUMERICSERV | AI_ADDRCONFIG
+        hints.ai_socktype = SOCK_STREAM
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(address, String(port), &hints, &info) == 0, let first = info else { return nil }
+        defer { freeaddrinfo(info) }
+        guard let socketAddress = first.pointee.ai_addr, isPublic(socketAddress) else { return nil }
+        let fd = socket(first.pointee.ai_family, SOCK_STREAM, IPPROTO_TCP)
+        guard fd >= 0 else { return nil }
+        defer { Darwin.close(fd) }
+        var one: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK)
+        let started = DispatchTime.now().uptimeNanoseconds
+        if Darwin.connect(fd, socketAddress, first.pointee.ai_addrlen) != 0 {
+            guard errno == EINPROGRESS else { return nil }
+            var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            guard poll(&poller, 1, Int32(timeout * 1000)) > 0 else { return nil }
+            var code: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &code, &length) == 0, code == 0 else { return nil }
+        }
+        let ms = Int((DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+        return max(ms, 1)
+    }
+
+    /// Nodes are on the internet: loopback, private, CGNAT and link-local
+    /// addresses are never dialled (the app filters them too).
+    static func isPublic(_ address: UnsafePointer<sockaddr>) -> Bool {
+        switch Int32(address.pointee.sa_family) {
+        case AF_INET:
+            let raw = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr.s_addr }
+            let b = withUnsafeBytes(of: raw) { Array($0) }
+            return !(b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 ||
+                (b[0] == 100 && b[1] >= 64 && b[1] <= 127) ||
+                (b[0] == 169 && b[1] == 254) ||
+                (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+                (b[0] == 192 && b[1] == 168))
+        case AF_INET6:
+            let b = address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { pointer in
+                withUnsafeBytes(of: pointer.pointee.sin6_addr) { Array($0) }
+            }
+            let loopbackOrAny = b[0..<15].allSatisfy { $0 == 0 } && b[15] <= 1
+            let uniqueLocal = (b[0] & 0xfe) == 0xfc
+            let linkLocal = b[0] == 0xfe && (b[1] & 0xc0) == 0x80
+            return !(loopbackOrAny || uniqueLocal || linkLocal || b[0] == 0xff)
+        default:
+            return false
+        }
     }
 }
 

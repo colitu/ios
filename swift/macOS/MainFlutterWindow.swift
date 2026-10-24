@@ -18,17 +18,33 @@ class MainFlutterWindow: NSWindow {
         super.awakeFromNib()
     }
 
-    /// Warm-spare swap: the app asks the tunnel to reload its core.
+    /// Warm-spare swap (the tunnel reloads its core) and pings while the VPN is up.
     private func setUpTunnelChannel(binaryMessenger: FlutterBinaryMessenger) {
         let channel = FlutterMethodChannel(name: "colitu/tunnel", binaryMessenger: binaryMessenger)
         channel.setMethodCallHandler { call, result in
-            guard call.method == "reloadCore" else {
+            switch call.method {
+            case "reloadCore":
+                Task {
+                    let ok = await VPNManager.shared.reloadCore()
+                    await MainActor.run { result(ok) }
+                }
+            case "measureLatency":
+                // [{address, port}] -> [ms, -1 = no answer], or nil.
+                let raw = call.arguments as? [[String: Any]] ?? []
+                let targets = raw.compactMap { item -> LatencyTarget? in
+                    guard let address = item["address"] as? String, let port = item["port"] as? Int else { return nil }
+                    return LatencyTarget(address: address, port: port)
+                }
+                guard targets.count == raw.count, !targets.isEmpty else {
+                    result(nil)
+                    return
+                }
+                Task {
+                    let ms = await VPNManager.shared.measureLatency(targets)
+                    await MainActor.run { result(ms) }
+                }
+            default:
                 result(FlutterMethodNotImplemented)
-                return
-            }
-            Task {
-                let ok = await VPNManager.shared.reloadCore()
-                await MainActor.run { result(ok) }
             }
         }
     }
