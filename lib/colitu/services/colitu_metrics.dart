@@ -71,7 +71,9 @@ int? colituStatusOf(Object error) =>
 class ColituMetricsData {
   static const maxCount = 10000;
   static const buckets = 9;
-  static const platform = 'ios';
+  /// The iOS build also runs on macOS (the direct download app).
+  static String get platform =>
+      defaultTargetPlatform == TargetPlatform.macOS ? 'macos' : 'ios';
 
   /// Upper bounds in ms of the first eight buckets; the ninth is slower than
   /// the last.

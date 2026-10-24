@@ -2,6 +2,7 @@ import Foundation
 import Network
 import NetworkExtension
 import Darwin
+import UserNotifications
 
 enum TunnelError: Error {
     case noSocketFd
@@ -580,8 +581,38 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             response = .ok
         case .reloadCore:
             response = reloadCoreFromApp()
+        case let .writeCoreConfig(content):
+            response = writeCoreConfig(content) ? .ok : .error("write xray.json")
+        case let .readRunFiles(names):
+            response = .runFiles(readRunFiles(names))
         }
         return try? TunnelMessageCoder.encode(response)
+    }
+
+    private func writeCoreConfig(_ content: Data) -> Bool {
+        guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return false }
+        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        do {
+            try content.write(to: runDir.adaptedAppendPath(path: "xray.json"), options: .atomic)
+            return true
+        } catch {
+            YGLog("writeCoreConfig error: \(error)")
+            return false
+        }
+    }
+
+    /// The last 2 MB of each requested run file that exists. Names are
+    /// single path segments; anything else is ignored.
+    private func readRunFiles(_ names: [String]) -> [String: Data] {
+        guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return [:] }
+        let limit = 2 << 20
+        var result: [String: Data] = [:]
+        for name in names {
+            guard !name.isEmpty, (name as NSString).lastPathComponent == name else { continue }
+            guard let data = try? Data(contentsOf: runDir.adaptedAppendPath(path: name)) else { continue }
+            result[name] = data.count > limit ? data.suffix(limit) : data
+        }
+        return result
     }
 
     // MARK: - dat staging operations
@@ -1455,6 +1486,7 @@ private extension PacketTunnelProvider {
                 guard let self = self else { return }
                 let footprint = self.writeTrafficSnapshot(coreAlive: self.coreRunning)
                 self.trafficTicks += 1
+                self.passportMinute()
                 let nearCap = footprint > Self.memoryTrimThreshold
                 if self.trafficTicks % 5 == 1 || nearCap {
                     self.goSysBytes = UInt64(max(0, CGoGoSysBytes()))
@@ -2704,6 +2736,127 @@ private extension PacketTunnelProvider {
         } else {
             try? data.write(to: url)
         }
+    }
+}
+
+// MARK: - Colitu Passport
+
+/// Colitu Passport minutes. iOS does not keep the app running in the
+/// background, so the tunnel (which runs as long as the VPN is on) writes one
+/// line per connected minute to run/passport_ticks.log: "<epoch ms>,<CC>".
+/// The app replays the lines through the same rules as Android when it comes
+/// to the foreground. The country is the one the app wrote to
+/// run/passport_cc for this connection; nothing else is recorded and the file
+/// never leaves the device. Optional local notifications (new stamp, the
+/// day's pieces) use texts the app prepared in run/passport_notify.json.
+private extension PacketTunnelProvider {
+    static let passportTicksName = "passport_ticks.log"
+    static let passportCountryName = "passport_cc"
+    static let passportNotifyName = "passport_notify.json"
+    static let passportNotifiedName = "passport_notified"
+    /// About four days of continuous use; older lines are dropped.
+    static let passportTicksLimit: UInt64 = 96 << 10
+    /// Uptime of the last written minute; nil while not connected.
+    static var passportAnchor: TimeInterval?
+    static let passportLock = NSLock()
+
+    /// Called about once a second by the traffic reporter.
+    func passportMinute() {
+        let now = ProcessInfo.processInfo.systemUptime
+        Self.passportLock.lock()
+        defer { Self.passportLock.unlock() }
+        // Only a working tunnel counts: not while connecting or reconnecting.
+        guard coreRunning, state == .connected, !restartInProgress else {
+            Self.passportAnchor = nil
+            return
+        }
+        guard let anchor = Self.passportAnchor else {
+            Self.passportAnchor = now
+            return
+        }
+        guard now - anchor >= 60 else { return }
+        // A late loop (the extension was suspended) still earns one minute only.
+        Self.passportAnchor = now - anchor >= 120 ? now : anchor + 60
+        guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run"),
+              let raw = try? String(contentsOf: runDir.adaptedAppendPath(path: Self.passportCountryName), encoding: .utf8)
+        else { return }
+        let cc = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard cc.count == 2, cc.unicodeScalars.allSatisfy({ $0.value >= 65 && $0.value <= 90 }) else { return }
+        let ts = Int64(Date().timeIntervalSince1970 * 1000)
+        let url = runDir.adaptedAppendPath(path: Self.passportTicksName)
+        Self.appendPassportLine("\(ts),\(cc)\n", to: url)
+        passportNotify(runDir: runDir, log: url, country: cc)
+    }
+
+    static func appendPassportLine(_ line: String, to url: URL) {
+        guard let data = line.data(using: .utf8) else { return }
+        let path = url.adaptedPath()
+        if let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? UInt64,
+           size > passportTicksLimit,
+           let old = try? Data(contentsOf: url) {
+            // Keep the newer half, starting at a whole line.
+            var tail = old.suffix(Int(passportTicksLimit / 2))
+            if let newline = tail.firstIndex(of: 10) { tail = tail[(newline + 1)...] }
+            try? Data(tail).write(to: url, options: .atomic)
+        }
+        if FileManager.default.fileExists(atPath: path), let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            handle.closeFile()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    /// Posts the passport notification for this minute, if any: a new stamp
+    /// after five minutes in a row in a country without one, a piece at the
+    /// day's 10th and 60th minute (every 10th for tester accounts).
+    func passportNotify(runDir: URL, log: URL, country: String) {
+        guard let data = try? Data(contentsOf: runDir.adaptedAppendPath(path: Self.passportNotifyName)),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (config["on"] as? Bool) == true,
+              let text = try? String(contentsOf: log, encoding: .utf8) else { return }
+        let ticks: [(Int64, String)] = text.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: ",")
+            guard parts.count == 2, let ts = Int64(parts[0]) else { return nil }
+            return (ts, String(parts[1]))
+        }
+        let dayStart = Int64(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970 * 1000)
+        let dayMinutes = ticks.filter { $0.0 >= dayStart }.count
+        var run = 0
+        var next: Int64?
+        for tick in ticks.reversed() {
+            guard tick.1 == country else { break }
+            if let later = next, later - tick.0 > 90_000 { break }
+            run += 1
+            next = tick.0
+        }
+        let countries = config["countries"] as? [String: [String: String]] ?? [:]
+        let texts = countries[country] ?? [:]
+        if run == 5, (config["locked"] as? [String])?.contains(country) == true,
+           let title = texts["unlockTitle"], let body = texts["unlockBody"] {
+            let marker = runDir.adaptedAppendPath(path: Self.passportNotifiedName)
+            let done = (try? String(contentsOf: marker, encoding: .utf8)) ?? ""
+            if !done.split(separator: ",").contains(Substring(country)) {
+                try? (done.isEmpty ? country : done + "," + country).write(to: marker, atomically: true, encoding: .utf8)
+                postPassportNotification(title: title, body: body)
+                return
+            }
+        }
+        let tester = (config["tester"] as? Bool) == true
+        let earns = tester ? dayMinutes % 10 == 0 : (dayMinutes == 10 || dayMinutes == 60)
+        if earns, let title = config["pieceTitle"] as? String, let body = config["pieceBody"] as? String {
+            postPassportNotification(title: title, body: body)
+        }
+    }
+
+    func postPassportNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.userInfo = ["colitu_passport": true]
+        let request = UNNotificationRequest(identifier: "colitu.passport", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 }
 

@@ -1950,6 +1950,1022 @@ class ColituLoc extends ChangeNotifier {
       'Yanıtınız için teşekkürler!',
       'Thanks for your answer!',
     ],
+    // Colitu Passport (stamps kept on the device; same keys as Android).
+    'passport.title': [
+      'Паспорт',
+      'Pasaport',
+      'Passport',
+    ],
+    'passport.countries': [
+      'стран',
+      'ülke',
+      'countries',
+    ],
+    'passport.cardSub': [
+      'Собирайте марки стран, к которым подключаетесь',
+      'Bağlandığın ülkelerin pullarını topla',
+      'Collect a stamp for every country you connect to',
+    ],
+    'passport.firstStamp': [
+      'Первая марка — после 5 минут подключения.',
+      'İlk pulun 5 dakikalık bir bağlantı uzağında.',
+      'Your first stamp is one 5-minute connection away.',
+    ],
+    'passport.complete': [
+      'Паспорт заполнен',
+      'Pasaport tamamlandı',
+      'Passport complete',
+    ],
+    'passport.share': [
+      'Поделиться',
+      'Paylaş',
+      'Share',
+    ],
+    'passport.shareStamp': [
+      'Поделиться маркой',
+      'Pulu paylaş',
+      'Share stamp',
+    ],
+    'passport.all': [
+      'Все',
+      'Tümü',
+      'All',
+    ],
+    'passport.unlocked': [
+      'Открытые',
+      'Açılan',
+      'Unlocked',
+    ],
+    'passport.locked': [
+      'Закрытые',
+      'Kilitli',
+      'Locked',
+    ],
+    'passport.hint': [
+      'Подключитесь к серверу в новой стране, чтобы открыть её марку.',
+      'Yeni bir ülkedeki sunucuya bağlan, o ülkenin pulunu aç.',
+      'Connect to a server in a new country to unlock its stamp.',
+    ],
+    'passport.local': [
+      'Марки хранятся только на этом устройстве.',
+      'Pulların yalnızca bu cihazda saklanır.',
+      'Your stamps are stored only on this device.',
+    ],
+    'passport.stampNo': [
+      'Марка № {n}',
+      'Pul No. {n}',
+      'Stamp No. {n}',
+    ],
+    'passport.notYet': [
+      'Ещё не открыта',
+      'Henüz açılmadı',
+      'Not unlocked yet',
+    ],
+    'passport.unlockedOn': [
+      'Открыта {date}',
+      'Açıldı: {date}',
+      'Unlocked {date}',
+    ],
+    'passport.unlockedDesc': [
+      'Получена при первом подключении. Страна: {country}.',
+      '{country} sunucusuna ilk bağlantında açıldı.',
+      'Unlocked on your first connection to {country}.',
+    ],
+    'passport.connectDesc': [
+      'Подключитесь к серверу ({country}), чтобы открыть марку.',
+      'Bu pulu açmak için {country} sunucusuna bağlan.',
+      'Connect to a server in {country} to unlock this stamp.',
+    ],
+    'passport.connectTo': [
+      'Подключиться: {country}',
+      '{country} sunucusuna bağlan',
+      'Connect to {country}',
+    ],
+    'passport.planDesc': [
+      'Серверы ({country}) сейчас вам недоступны.',
+      '{country} sunucuları şu an senin için açık değil.',
+      '{country} servers are not open to you right now.',
+    ],
+    'passport.offlineDesc': [
+      'Серверы ({country}) сейчас не работают.',
+      '{country} sunucuları şu an kullanılamıyor.',
+      '{country} servers are not available right now.',
+    ],
+    'passport.seePlans': [
+      'Смотреть планы',
+      'Planları gör',
+      'See plans',
+    ],
+    'passport.close': [
+      'Закрыть',
+      'Kapat',
+      'Close',
+    ],
+    'passport.newStamp': [
+      'Новая марка в паспорте: {country}',
+      'Pasaportuna yeni pul: {country}',
+      'New passport stamp: {country}',
+    ],
+    'passport.shareText': [
+      'Мой паспорт Colitu: {n} из {total} стран. colitu.com',
+      'Colitu Pasaportum: {total} ülkeden {n} tanesi. colitu.com',
+      'My Colitu Passport: {n} of {total} countries. colitu.com',
+    ],
+    'passport.shareStampText': [
+      'Новая марка в моём паспорте Colitu: {country}. colitu.com',
+      'Colitu Pasaportuma yeni pul: {country}. colitu.com',
+      'New stamp in my Colitu Passport: {country}. colitu.com',
+    ],
+    'passport.intro.start': [
+      'Начать',
+      'Başla',
+      'Start',
+    ],
+    'passport.intro.body': [
+      'Каждая страна, к которой вы подключаетесь, оставляет марку. Всё хранится на вашем устройстве.',
+      'Bağlandığın her ülke bir pul bırakır. Her şey yalnızca cihazında saklanır.',
+      'Every country you connect to leaves a stamp. It all stays on your device.',
+    ],
+    'passport.intro.title': [
+      'Ваш паспорт путешествий',
+      'Seyahat pasaportun hazır',
+      'Your travel passport',
+    ],
+    'passport.set.metricsBody': [
+      'Раз в день — только общие числа паспорта, без аккаунта и подключений.',
+      'Günde bir kez yalnızca pasaportun toplam sayıları gider; hesap ve bağlantı bilgisi yok.',
+      'Once a day, only the passport\'s totals; no account or connection data.',
+    ],
+    'passport.set.metrics': [
+      'Анонимная статистика',
+      'Anonim istatistik',
+      'Anonymous statistics',
+    ],
+    'passport.set.haptics': [
+      'Вибрация',
+      'Titreşim',
+      'Vibration',
+    ],
+    'passport.set.sound': [
+      'Звуки',
+      'Sesler',
+      'Sounds',
+    ],
+    'passport.r.special': [
+      'ОСОБАЯ МАРКА',
+      'ÖZEL PUL',
+      'SPECIAL STAMP',
+    ],
+    'passport.companion.body': [
+      'Марка за приглашение: её получают оба — и пригласивший, и новый друг.',
+      'Davetin pulu: davet eden de davet edilen de alır.',
+      'The invite stamp: both the one who invites and the new friend get it.',
+    ],
+    'passport.companion.have': [
+      'Получена за приглашение.',
+      'Davet ile kazanıldı.',
+      'Earned with an invite.',
+    ],
+    'passport.companion.how': [
+      'Пригласите друга или зарегистрируйтесь по приглашению.',
+      'Bir arkadaşını davet et ya da davetle kaydol.',
+      'Invite a friend, or sign up with an invite.',
+    ],
+    'passport.special': [
+      'ОСОБЫЕ МАРКИ',
+      'ÖZEL PULLAR',
+      'SPECIAL STAMPS',
+    ],
+    'passport.friends.local': [
+      'Список хранится только на этом устройстве.',
+      'Liste yalnızca bu cihazda saklanır.',
+      'The list stays on this device only.',
+    ],
+    'passport.friends.remove': [
+      'Удалить друга',
+      'Arkadaşı kaldır',
+      'Remove friend',
+    ],
+    'passport.friends.ranking': [
+      'Показывать рейтинг',
+      'Sıralamayı göster',
+      'Show ranking',
+    ],
+    'passport.friends.empty': [
+      'Отсканируйте QR паспорта друга — он появится здесь.',
+      'Bir arkadaşının pasaport QR\'ını tara, burada listelensin.',
+      'Scan a friend\'s passport QR and they appear here.',
+    ],
+    'passport.friends': [
+      'Друзья',
+      'Arkadaşlar',
+      'Friends',
+    ],
+    'passport.icon.stamp': [
+      'Марка',
+      'Pul',
+      'Stamp',
+    ],
+    'passport.icon.sunset': [
+      'Закат',
+      'Gün Batımı',
+      'Sunset',
+    ],
+    'passport.icon.diamond': [
+      'Бриллиант',
+      'Elmas',
+      'Diamond',
+    ],
+    'passport.icon.gold': [
+      'Золото',
+      'Altın',
+      'Gold',
+    ],
+    'passport.icon.aurora': [
+      'Аврора',
+      'Aurora',
+      'Aurora',
+    ],
+    'passport.icon.midnight': [
+      'Полночь',
+      'Gece Yarısı',
+      'Midnight',
+    ],
+    'passport.icon.light': [
+      'Светлый',
+      'Açık',
+      'Light',
+    ],
+    'passport.icon.indigo': [
+      'Индиго',
+      'İndigo',
+      'Indigo',
+    ],
+    'passport.icon.default': [
+      'Классика',
+      'Klasik',
+      'Classic',
+    ],
+    'passport.req.set': [
+      'Коллекция {set}',
+      '{set} seti',
+      '{set} set',
+    ],
+    'passport.req.premium': [
+      'С Premium',
+      'Premium ile',
+      'With Premium',
+    ],
+    'passport.id.noStamps': [
+      'Первая марка появится здесь.',
+      'İlk pulun burada görünecek.',
+      'Your first stamp will show here.',
+    ],
+    'passport.id.holder': [
+      'ВЛАДЕЛЕЦ',
+      'SAHİBİ',
+      'HOLDER',
+    ],
+    'passport.nx.counting': [
+      'VPN включён: минуты считаются.',
+      'VPN açık: dakikaların sayılıyor.',
+      'VPN is on: your minutes are counting.',
+    ],
+    'passport.nx.pieces': [
+      'частей сегодня',
+      'parça bugün',
+      'pieces today',
+    ],
+    'passport.nx.minutes': [
+      'минут сегодня',
+      'dakika bugün',
+      'minutes today',
+    ],
+    'passport.nx.done': [
+      'Сегодняшние части собраны. Завтра на 10-й и 60-й минуте придут новые.',
+      'Bugünün parçaları toplandı. Yarın 10. ve 60. dakikada yenileri gelir.',
+      'Today\'s pieces are collected. New ones come tomorrow at minute 10 and 60.',
+    ],
+    'passport.nx.level': [
+      'Марке «{country}» до уровня «{level}» осталось {n} ч. Части дня идут той стране, к которой вы подключены в этот момент.',
+      '{country} pulu {level} seviyesine {n} parça uzakta. Günlük parçalar, o an bağlı olduğun ülkenin puluna gider.',
+      'Your {country} stamp is {n} pieces from {level}. Each day\'s pieces go to the country you are connected to at that moment.',
+    ],
+    'passport.nx.today': [
+      'Пока VPN включён, на 10-й минуте дня марка страны, к которой вы подключены, получает часть пазла. На 60-й — ещё одну. Не больше двух в день.',
+      'VPN açıkken gün içinde 10. dakika dolduğunda, o an bağlı olduğun ülkenin puluna 1 parça eklenir. 60. dakikada 1 parça daha gelir. Günde en fazla 2 parça.',
+      'While the VPN is on, minute 10 of the day adds a piece to the stamp of the country you are connected to, and minute 60 adds another. Two a day at most.',
+    ],
+    'passport.nx.title': [
+      'Следующая цель',
+      'Sıradaki görev',
+      'Next up',
+    ],
+    'passport.lockedHint': [
+      'Подключитесь к серверу этой страны на 5 минут — и марка ваша.',
+      'Bu ülkenin sunucusuna 5 dakika bağlan, pul senin.',
+      'Connect to a server in this country for 5 minutes and the stamp is yours.',
+    ],
+    'passport.how4b': [
+      'Наборы стран, скрытые достижения и экспедиции недели дают обложки, печати и звания.',
+      'Ülke setleri, gizli başarılar ve haftalık seferler kapak, mühür ve unvan kazandırır.',
+      'Country sets, hidden achievements and weekly expeditions earn covers, seals and titles.',
+    ],
+    'passport.how4': [
+      'Коллекции и награды',
+      'Koleksiyon ve ödüller',
+      'Collections and rewards',
+    ],
+    'passport.how3b': [
+      '12 частей — следующий уровень: Бронза, Серебро, Золото, Бриллиант.',
+      '12 parça bir üst seviye: Bronz, Gümüş, Altın, Elmas.',
+      '12 pieces take a stamp up: Bronze, Silver, Gold, Diamond.',
+    ],
+    'passport.how3': [
+      'Уровни',
+      'Seviyeler',
+      'Levels',
+    ],
+    'passport.how2b': [
+      'На 10-й и 60-й минуте дня — по части. Больше двух в день не бывает.',
+      'Her gün 10. ve 60. dakikada birer parça. Günde en fazla 2.',
+      'One piece at minute 10 and one at minute 60 each day. Two a day at most.',
+    ],
+    'passport.how2': [
+      'Части пазла',
+      'Puzzle parçaları',
+      'Puzzle pieces',
+    ],
+    'passport.how1b': [
+      '5 минут подряд на сервере новой страны — и её марка ваша.',
+      'Yeni bir ülkenin sunucusunda 5 dakika kal, o ülkenin pulu senin.',
+      'Stay 5 minutes on a new country\'s server and its stamp is yours.',
+    ],
+    'passport.how1': [
+      'Марка',
+      'Pul',
+      'Stamp',
+    ],
+    'passport.step3b': [
+      '= новый уровень',
+      '= yeni seviye',
+      '= next level',
+    ],
+    'passport.step3': [
+      '12 частей',
+      '12 parça',
+      '12 pieces',
+    ],
+    'passport.step2b': [
+      '+2 части',
+      '+2 parça',
+      '+2 pieces',
+    ],
+    'passport.step2': [
+      'Каждый день',
+      'Her gün',
+      'Every day',
+    ],
+    'passport.step1b': [
+      '= марка',
+      '= pul',
+      '= a stamp',
+    ],
+    'passport.step1': [
+      '5 минут в стране',
+      'Bir ülkede 5 dk',
+      '5 min in a country',
+    ],
+    'passport.ch2.locked': [
+      'Откроется, когда вы соберёте Origin.',
+      'Origin\'i tamamlayınca açılır.',
+      'Opens once Origin is complete.',
+    ],
+    'passport.chName3': [
+      'Legacy',
+      'Legacy',
+      'Legacy',
+    ],
+    'passport.chName2': [
+      'Horizons',
+      'Horizons',
+      'Horizons',
+    ],
+    'passport.chName1': [
+      'Origin',
+      'Origin',
+      'Origin',
+    ],
+    'passport.tile.badges': [
+      'Достижения',
+      'Başarılar',
+      'Achievements',
+    ],
+    'passport.tile.sets': [
+      'Коллекции',
+      'Koleksiyon',
+      'Collections',
+    ],
+    'passport.tile.week': [
+      'Экспедиции',
+      'Seferler',
+      'Expeditions',
+    ],
+    'passport.next': [
+      'ДАЛЕЕ',
+      'SIRADAKİ',
+      'NEXT UP',
+    ],
+    'passport.how': [
+      'Как это работает',
+      'Nasıl çalışır?',
+      'How it works',
+    ],
+    'passport.id.iconNote': [
+      'Значок сменится, когда вы выйдете из приложения.',
+      'İkon, uygulamadan çıkınca değişir.',
+      'The icon changes when you leave the app.',
+    ],
+    'passport.id.icon': [
+      'Значок приложения',
+      'Uygulama ikonu',
+      'App icon',
+    ],
+    'passport.duel.again': [
+      'Сканировать ещё',
+      'Başka birini tara',
+      'Scan another',
+    ],
+    'passport.duel.you': [
+      'Вы',
+      'Sen',
+      'You',
+    ],
+    'passport.duel.camera': [
+      'Нужен доступ к камере, чтобы сканировать QR.',
+      'QR taramak için kamera izni gerekiyor.',
+      'Camera access is needed to scan the QR.',
+    ],
+    'passport.duel.notPassport': [
+      'Это не QR паспорта Colitu',
+      'Bu bir Colitu pasaport QR\'ı değil',
+      'This is not a Colitu passport QR',
+    ],
+    'passport.duel.point': [
+      'Наведите камеру на QR паспорта друга',
+      'Kamerayı arkadaşının pasaport QR\'ına tut',
+      'Point the camera at your friend\'s passport QR',
+    ],
+    'passport.duel.scan': [
+      'Сканировать',
+      'Tara',
+      'Scan',
+    ],
+    'passport.duel.mine': [
+      'Мой QR',
+      'QR\'ım',
+      'My QR',
+    ],
+    'passport.duel.sub': [
+      'Покажите свой QR другу или отсканируйте его. Данные не уходят на сервер.',
+      'QR\'ını arkadaşına göster ya da onunkini tara. Hiçbir veri sunucuya gitmez.',
+      'Show your QR to a friend or scan theirs. Nothing goes to a server.',
+    ],
+    'passport.duel.title': [
+      'Сравнить паспорта',
+      'Pasaport karşılaştır',
+      'Compare passports',
+    ],
+    'passport.r.expedition': [
+      'ЭКСПЕДИЦИЯ ПРОЙДЕНА',
+      'SEFER TAMAMLANDI',
+      'EXPEDITION COMPLETE',
+    ],
+    'passport.r.chapterBody3': [
+      'Глава мастерства: «Золото» и «Бриллиант» для всего паспорта.',
+      'Ustalık bölümü: tüm pasaportu Altın ve Elmas\'a taşı.',
+      'The mastery chapter: take the whole passport to Gold and Diamond.',
+    ],
+    'passport.r.chapterBody2': [
+      '10 новых стран. Марки стран, где вы уже были, откроются сейчас.',
+      '10 yeni ülke. Daha önce bağlandığın ülkelerin pulları şimdi açılıyor.',
+      '10 new countries. Stamps for countries you already visited open now.',
+    ],
+    'passport.r.chapterOpen': [
+      'НОВАЯ ГЛАВА',
+      'YENİ BÖLÜM',
+      'NEW CHAPTER',
+    ],
+    'passport.ach.legacy_diamond': [
+      'Все марки главы 01 на «Бриллианте»',
+      'Chapter 01\'in tüm pulları Elmas',
+      'Every Chapter 01 stamp at Diamond',
+    ],
+    'passport.ach.legacy_gold': [
+      'Все марки главы 01 на «Золоте»',
+      'Chapter 01\'in tüm pulları Altın',
+      'Every Chapter 01 stamp at Gold',
+    ],
+    'passport.ach.pathfinder': [
+      'Пройдите 5 экспедиций недели',
+      '5 haftalık sefer tamamla',
+      'Finish 5 weekly expeditions',
+    ],
+    'passport.x.pieces': [
+      'Соберите 4 части пазла',
+      '4 puzzle parçası topla',
+      'Collect 4 puzzle pieces',
+    ],
+    'passport.x.set_stamp': [
+      'Добавьте марку в коллекцию',
+      'Bir koleksiyona pul ekle',
+      'Add a stamp to a collection',
+    ],
+    'passport.x.days10': [
+      '10 минут с VPN в 3 разных дня',
+      '3 farklı günde 10 dakika kullan',
+      '10 minutes on 3 different days',
+    ],
+    'passport.x.customize': [
+      'Измените звание или обложку',
+      'Unvanını ya da kapağını değiştir',
+      'Change your title or cover',
+    ],
+    'passport.x.share': [
+      'Поделитесь маркой или паспортом',
+      'Bir pulu ya da pasaportunu paylaş',
+      'Share a stamp or your passport',
+    ],
+    'passport.x.new_country': [
+      'Откройте марку новой страны',
+      'Yeni bir ülkenin pulunu aç',
+      'Unlock a new country\'s stamp',
+    ],
+    'passport.week.visa': [
+      'ВИЗА',
+      'VİZE',
+      'VISA',
+    ],
+    'passport.week.note': [
+      'Новые экспедиции — по понедельникам. Пропустить неделю не страшно.',
+      'Yeni seferler pazartesi gelir. Bir haftayı kaçırmak sorun değil.',
+      'New expeditions arrive on Mondays. Missing a week is fine.',
+    ],
+    'passport.week.total': [
+      'Пройдено: {n}',
+      'Tamamlanan: {n}',
+      'Completed: {n}',
+    ],
+    'passport.week.title': [
+      'Экспедиции недели',
+      'Bu haftanın seferleri',
+      'This week\'s expeditions',
+    ],
+    'passport.legacy.keep': [
+      'Всё, что вы собрали, остаётся навсегда.',
+      'Kazandığın her şey kalıcıdır.',
+      'Everything you earn stays yours.',
+    ],
+    'passport.legacy.locked': [
+      'Глава 03 откроется, когда будет собрана глава 02. Прогресс уже считается.',
+      'Chapter 03, Chapter 02 tamamlanınca açılır. İlerlemen şimdiden sayılıyor.',
+      'Chapter 03 opens once Chapter 02 is complete. Your progress already counts.',
+    ],
+    'passport.legacy.gold2': [
+      'Все марки главы 02 на «Золоте»',
+      'Chapter 02\'nin tüm pulları Altın',
+      'Every Chapter 02 stamp at Gold',
+    ],
+    'passport.legacy.diamond1': [
+      'Все марки главы 01 на «Бриллианте»',
+      'Chapter 01\'in tüm pulları Elmas',
+      'Every Chapter 01 stamp at Diamond',
+    ],
+    'passport.legacy.gold1': [
+      'Все марки главы 01 на «Золоте»',
+      'Chapter 01\'in tüm pulları Altın',
+      'Every Chapter 01 stamp at Gold',
+    ],
+    'passport.ch.lockedBody': [
+      'Соберите все марки главы 01 ({n}/{total}). Подключения к этим странам уже засчитываются.',
+      'Chapter 01\'in tüm pullarını topla ({n}/{total}). Bu ülkelere bağlantıların şimdiden sayılıyor.',
+      'Collect every Chapter 01 stamp ({n}/{total}). Your connections to these countries already count.',
+    ],
+    'passport.ch.lockedTitle': [
+      'Глава 02 пока закрыта',
+      'Chapter 02 henüz kapalı',
+      'Chapter 02 is still closed',
+    ],
+    'passport.ch3': [
+      'Глава 03 · Legacy',
+      'Chapter 03 · Legacy',
+      'Chapter 03 · Legacy',
+    ],
+    'passport.ch2': [
+      'Глава 02 · Horizons',
+      'Chapter 02 · Horizons',
+      'Chapter 02 · Horizons',
+    ],
+    'passport.ch1': [
+      'Глава 01 · Origin',
+      'Chapter 01 · Origin',
+      'Chapter 01 · Origin',
+    ],
+    'passport.r.great': [
+      'Отлично',
+      'Harika',
+      'Great',
+    ],
+    'passport.r.ach': [
+      'ДОСТИЖЕНИЕ',
+      'BAŞARI',
+      'ACHIEVEMENT',
+    ],
+    'passport.r.secretAch': [
+      'СКРЫТОЕ ДОСТИЖЕНИЕ',
+      'GİZLİ BAŞARI',
+      'SECRET ACHIEVEMENT',
+    ],
+    'passport.r.useCover': [
+      'Поставить обложку',
+      'Kapağı kullan',
+      'Use this cover',
+    ],
+    'passport.r.newCover': [
+      'Новая обложка: {cover}',
+      'Yeni kapak açıldı: {cover}',
+      'New cover unlocked: {cover}',
+    ],
+    'passport.r.setDone': [
+      'КОЛЛЕКЦИЯ СОБРАНА',
+      'KOLEKSİYON TAMAMLANDI',
+      'COLLECTION COMPLETE',
+    ],
+    'passport.cover.pacific': [
+      'Pacific',
+      'Pacific',
+      'Pacific',
+    ],
+    'passport.cover.atlantic': [
+      'Atlantic',
+      'Atlantic',
+      'Atlantic',
+    ],
+    'passport.cover.baltic': [
+      'Baltic',
+      'Baltic',
+      'Baltic',
+    ],
+    'passport.cover.nordic': [
+      'Nordic',
+      'Nordic',
+      'Nordic',
+    ],
+    'passport.cover.premium': [
+      'Premium',
+      'Premium',
+      'Premium',
+    ],
+    'passport.cover.classic': [
+      'Классика',
+      'Klasik',
+      'Classic',
+    ],
+    'passport.id.collector': [
+      'Коллекционер №{n}',
+      'Koleksiyoner #{n}',
+      'Collector #{n}',
+    ],
+    'passport.id.save': [
+      'Сохранить',
+      'Kaydet',
+      'Save',
+    ],
+    'passport.id.cover': [
+      'Обложка',
+      'Kapak',
+      'Cover',
+    ],
+    'passport.id.none': [
+      'Нет',
+      'Yok',
+      'None',
+    ],
+    'passport.id.favorite': [
+      'Любимая марка',
+      'Favori pul',
+      'Favourite stamp',
+    ],
+    'passport.id.noTitle': [
+      'Без звания',
+      'Unvansız',
+      'No title',
+    ],
+    'passport.id.title': [
+      'Звание',
+      'Unvan',
+      'Title',
+    ],
+    'passport.id.nickHint': [
+      'Псевдоним, хранится только на устройстве',
+      'Takma ad, yalnızca cihazda saklanır',
+      'A nickname, kept only on this device',
+    ],
+    'passport.id.nick': [
+      'Имя в паспорте',
+      'Pasaporttaki ad',
+      'Name on the passport',
+    ],
+    'passport.id.edit': [
+      'Мой паспорт',
+      'Pasaportunu özelleştir',
+      'Customize your passport',
+    ],
+    'passport.ach.inUse': [
+      'Используется',
+      'Kullanılıyor',
+      'In use',
+    ],
+    'passport.ach.use': [
+      'Взять звание',
+      'Unvanı kullan',
+      'Use title',
+    ],
+    'passport.ach.secret': [
+      'Скрытое достижение',
+      'Gizli başarı',
+      'Secret achievement',
+    ],
+    'passport.ach.diamond': [
+      '3 марки на уровне «Бриллиант»',
+      '3 pul Elmas seviyede',
+      '3 stamps at Diamond',
+    ],
+    'passport.ach.longhaul': [
+      '60 минут в день, 7 разных дней',
+      '7 farklı günde 60 dakika',
+      '60 minutes a day on 7 different days',
+    ],
+    'passport.ach.early': [
+      '10 минут с VPN между 05:00 и 07:00',
+      '05:00–07:00 arasında 10 dakika',
+      '10 minutes between 05:00 and 07:00',
+    ],
+    'passport.ach.night': [
+      '10 минут с VPN между 00:00 и 05:00',
+      '00:00–05:00 arasında 10 dakika',
+      '10 minutes between 00:00 and 05:00',
+    ],
+    'passport.ach.nordic_master': [
+      'Швеция, Финляндия и Норвегия на «Золоте»',
+      'İsveç, Finlandiya ve Norveç Altın seviyede',
+      'Sweden, Finland and Norway at Gold',
+    ],
+    'passport.ach.origin': [
+      'Все 10 марок главы 1',
+      'Chapter 01\'in 10 pulunun hepsi',
+      'All 10 stamps of Chapter 01',
+    ],
+    'passport.ach.globe': [
+      '5 разных стран за 7 дней',
+      '7 günde 5 farklı ülke',
+      '5 different countries in 7 days',
+    ],
+    'passport.ach.first': [
+      'Первая марка в паспорте',
+      'İlk pulunu kazan',
+      'Earn your first stamp',
+    ],
+    'passport.set.nextChapter': [
+      'Часть стран — из главы 2: их марки уже засчитываются.',
+      'Bazı ülkeler Chapter 02\'den; o ülkelere bağlantıların şimdiden sayılıyor.',
+      'Some countries belong to Chapter 02; your connections there already count.',
+    ],
+    'passport.set.rewardSeal': [
+      'Награда: печать',
+      'Ödül: mühür',
+      'Reward: seal',
+    ],
+    'passport.set.rewardCover': [
+      'Награда: обложка {cover} + печать',
+      'Ödül: {cover} kapak + mühür',
+      'Reward: {cover} cover + seal',
+    ],
+    'passport.set.done': [
+      'Собрано {date}',
+      'Tamamlandı: {date}',
+      'Completed {date}',
+    ],
+    'passport.set.goldRush': [
+      'Любые 3 марки на уровне «Золото»',
+      'Herhangi 3 pul Altın seviyede',
+      'Any 3 stamps at Gold',
+    ],
+    'passport.set.secret': [
+      'Скрытая коллекция: откроется, когда вы её соберёте',
+      'Gizli koleksiyon: tamamlayınca ortaya çıkar',
+      'Hidden collection: revealed once you complete it',
+    ],
+    'passport.tab.badges': [
+      'Достижения',
+      'Başarılar',
+      'Achievements',
+    ],
+    'passport.tab.sets': [
+      'Коллекции',
+      'Koleksiyonlar',
+      'Collections',
+    ],
+    'passport.tab.stamps': [
+      'Марки',
+      'Pullar',
+      'Stamps',
+    ],
+    'passport.s.cta': [
+      'Соберите свою коллекцию · colitu.com',
+      'Kendi koleksiyonunu başlat · colitu.com',
+      'Build your own collection · colitu.com',
+    ],
+    'passport.s.collected': [
+      'стран в коллекции',
+      'ülke pulu toplandı',
+      'country stamps collected',
+    ],
+    'passport.notify': [
+      'Уведомления о частях',
+      'Parça bildirimleri',
+      'Piece notifications',
+    ],
+    'passport.mins': [
+      '{n} мин',
+      '{n} dk',
+      '{n} min',
+    ],
+    'passport.hours': [
+      '{n} ч',
+      '{n} sa',
+      '{n} h',
+    ],
+    'passport.today': [
+      'Сегодня: {m} мин · частей {p}/2',
+      'Bugün: {m} dk · {p}/2 parça',
+      'Today: {m} min · {p}/2 pieces',
+    ],
+    'passport.goal.done': [
+      'Части на сегодня собраны',
+      'Bugünün parçaları toplandı',
+      'Today\'s pieces are collected',
+    ],
+    'passport.goal.level': [
+      '{country}: до уровня «{level}» {n} ч.',
+      '{country} {level} için {n} parça',
+      '{country}: {n} pieces to {level}',
+    ],
+    'passport.goal.today': [
+      'Ещё {n} мин — и часть на сегодня',
+      'Bugünkü parçaya {n} dk kaldı',
+      '{n} min to today\'s piece',
+    ],
+    'passport.goal.first': [
+      'Первая марка — 5 минут подключения',
+      'İlk pulun 5 dakikalık bağlantı uzağında',
+      'Your first stamp is a 5-minute connection away',
+    ],
+    'passport.r.tap': [
+      'Нажмите, чтобы продолжить',
+      'Devam etmek için dokun',
+      'Tap to continue',
+    ],
+    'passport.r.story': [
+      'Поделиться в Story',
+      'Story olarak paylaş',
+      'Share as Story',
+    ],
+    'passport.r.add': [
+      'В коллекцию',
+      'Koleksiyona ekle',
+      'Add to collection',
+    ],
+    'passport.r.piece': [
+      '+1 часть',
+      '+1 parça',
+      '+1 piece',
+    ],
+    'passport.r.levelUnlocked': [
+      '{level}: открыто',
+      '{level} açıldı',
+      '{level} unlocked',
+    ],
+    'passport.r.unlocked': [
+      '{country}: открыта',
+      '{country} açıldı',
+      '{country} unlocked',
+    ],
+    'passport.r.newLevel': [
+      'НОВЫЙ УРОВЕНЬ',
+      'YENİ SEVİYE',
+      'NEW LEVEL',
+    ],
+    'passport.r.newStamp': [
+      'НОВАЯ МАРКА',
+      'YENİ PUL',
+      'NEW STAMP',
+    ],
+    'passport.n.levelBody': [
+      'Откройте паспорт, чтобы увидеть.',
+      'Görmek için pasaportunu aç.',
+      'Open your passport to see it.',
+    ],
+    'passport.n.pieceTitle': [
+      '+1 часть марки: {country}',
+      '{country} puluna 1 parça eklendi',
+      '+1 piece for your {country} stamp',
+    ],
+    'passport.n.unlockedBody': [
+      'Бронзовая марка добавлена в паспорт.',
+      'Bronz pul pasaportuna eklendi.',
+      'A Bronze stamp joined your passport.',
+    ],
+    'passport.n.unlockedTitle': [
+      'Новая марка: {country}',
+      'Yeni pul: {country}',
+      'New stamp: {country}',
+    ],
+    'passport.n.channel': [
+      'Паспорт Colitu',
+      'Colitu Pasaport',
+      'Colitu Passport',
+    ],
+    'passport.shareLevelText': [
+      'Моя марка Colitu: {country}, {level}. colitu.com',
+      'Colitu pulum: {country}, {level}. colitu.com',
+      'My Colitu stamp: {country}, {level}. colitu.com',
+    ],
+    'passport.testAdd': [
+      'Тест: +5 подключений',
+      'Test: +5 bağlantı',
+      'Test: +5 connections',
+    ],
+    'passport.validRule': [
+      'Часть — на 10-й и 60-й минуте дня (до 2 в день).',
+      'Her gün 10. ve 60. dakikada birer parça (günde en fazla 2).',
+      'A piece at minute 10 and minute 60 each day (2 a day max).',
+    ],
+    'passport.masteredShort': [
+      'Бриллиант собран',
+      'Elmas tamamlandı',
+      'Diamond complete',
+    ],
+    'passport.toMaster': [
+      'до полного бриллианта: {n} ч.',
+      'Elmas\'ı tamamlamak için {n} parça',
+      '{n} pieces to complete Diamond',
+    ],
+    'passport.toNext': [
+      'до уровня «{level}»: {n} ч.',
+      '{level} için {n} parça kaldı',
+      '{n} pieces to {level}',
+    ],
+    'passport.pieces': [
+      '{n}/12 частей',
+      '{n}/12 parça',
+      '{n}/12 pieces',
+    ],
+    'passport.connections': [
+      '{n} подкл.',
+      '{n} bağlantı',
+      '{n} connections',
+    ],
+    'passport.level.diamond': [
+      'Бриллиант',
+      'Elmas',
+      'Diamond',
+    ],
+    'passport.level.gold': [
+      'Золото',
+      'Altın',
+      'Gold',
+    ],
+    'passport.level.silver': [
+      'Серебро',
+      'Gümüş',
+      'Silver',
+    ],
+    'passport.level.bronze': [
+      'Бронза',
+      'Bronz',
+      'Bronze',
+    ],
+    'passport.mastered': [
+      'Марка «{country}»: бриллиант собран полностью',
+      '{country} pulu: Elmas tamamlandı',
+      '{country} stamp: Diamond complete',
+    ],
+    'passport.levelUp': [
+      'Марка «{country}» стала: {level}',
+      '{country} pulu {level} oldu',
+      '{country} stamp is now {level}',
+    ],
   };
 
   static const _countries = <String, List<String>>{

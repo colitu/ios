@@ -1,3 +1,4 @@
+import AVFoundation
 import BackgroundTasks
 import Flutter
 import MessageUI
@@ -38,7 +39,8 @@ import UIKit
         startNetworkTransitionMonitor(binaryMessenger: binaryMessenger)
         setUpTunnelChannel(binaryMessenger: binaryMessenger)
         setUpBackupExclusion(binaryMessenger: binaryMessenger)
-        
+        setUpPassportSound(binaryMessenger: binaryMessenger)
+
         GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     }
 
@@ -53,6 +55,36 @@ import UIKit
             Task {
                 let ok = await VPNManager.shared.reloadCore()
                 await MainActor.run { result(ok) }
+            }
+        }
+    }
+
+    /// Colitu Passport sound effects (flutter asset path). The ambient
+    /// category mixes with other audio and stays quiet with the ring/silent
+    /// switch on silent, so a muted phone only gets the haptic.
+    private var passportPlayer: AVAudioPlayer?
+
+    private func setUpPassportSound(binaryMessenger: FlutterBinaryMessenger) {
+        let channel = FlutterMethodChannel(name: "colitu/passport_sound", binaryMessenger: binaryMessenger)
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard call.method == "play", let asset = call.arguments as? String else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            let key = FlutterDartProject.lookupKey(forAsset: asset)
+            guard let path = Bundle.main.path(forResource: key, ofType: nil) else {
+                result(false)
+                return
+            }
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+                let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+                player.volume = 0.8
+                player.play()
+                self?.passportPlayer = player
+                result(true)
+            } catch {
+                result(false)
             }
         }
     }

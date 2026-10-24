@@ -19,6 +19,7 @@ class VPNManager {
     private var systemExtensionSetupTask: Task<Bool, Never>?
     private var protectedReconnectTask: Task<Void, Never>?
     private var suppressProtectedReconnect = false
+    private var runFileMirrorTask: Task<Void, Never>?
 
     init() {
         YGLog("VPNManager init")
@@ -26,6 +27,9 @@ class VPNManager {
             .sink(receiveValue: { noti in
                 if let session = noti.object as? NETunnelProviderSession {
                     if session == self.vpn?.connection {
+                        if Constants.useSystemExtension {
+                            Task { @MainActor in self.updateRunFileMirror(session: session) }
+                        }
                         if session.status == .disconnected {
                             Task { @MainActor in
                                 if self.suppressProtectedReconnect {
@@ -104,6 +108,9 @@ class VPNManager {
             if let vpn = try await findVpn() {
                 self.vpn = vpn
                 await disableAutomaticReconnectIfUnused(vpn)
+                if Constants.useSystemExtension, let session = vpn.connection as? NETunnelProviderSession {
+                    updateRunFileMirror(session: session)
+                }
             } else {
                 vpn = newVpn()
                 try await saveVpn(vpn: vpn!, tun: TunJson())
@@ -139,7 +146,9 @@ class VPNManager {
         let force = false
         #endif
         do {
-            if await SystemExtensionManager.isInstalled() && !force {
+            // Only the extension of this app version counts: after an app
+            // update the activation request replaces the older one.
+            if !force, await SystemExtensionManager.isInstalled(matchingBundledVersion: true) {
                 return true
             }
             if let result = try await SystemExtensionManager.activate(forceReplace: force) {
@@ -148,7 +157,8 @@ class VPNManager {
             return false
         } catch {
             YGLog("setup system extension error: \(error.localizedDescription)")
-            return false
+            // The request is cancelled when the same version is already active.
+            return await SystemExtensionManager.isInstalled()
         }
     }
     #endif
@@ -617,6 +627,12 @@ class VPNManager {
             return false
         }
         do {
+            if Constants.useSystemExtension {
+                guard let xrayJson = readAndRewriteXrayJson(),
+                      case .ok = try await sendTunnelRequest(session: session, .writeCoreConfig(content: xrayJson)) else {
+                    return false
+                }
+            }
             if case .ok = try await sendTunnelRequest(session: session, .reloadCore) {
                 return true
             }
@@ -624,6 +640,52 @@ class VPNManager {
         } catch {
             YGLog("reloadCore failed: \(error)")
             return false
+        }
+    }
+
+    // MARK: - System Extension run files
+
+    /// Read by the Flutter side once a second (traffic heartbeat).
+    private static let liveRunFiles = ["traffic.json"]
+    /// Tunnel stops, stability events and the extension's stderr, for the
+    /// connection screen and the diagnostics report.
+    private static let slowRunFiles = [
+        "drops.jsonl", "stability_log.jsonl", "stability_log.prev.jsonl",
+        "tunnel-stderr.log", "tunnel-stderr.prev.log", "goroutines.txt",
+    ]
+
+    /// The system extension runs as root and writes its run files into
+    /// root's group container, which the sandboxed app cannot read. While
+    /// the tunnel is up the app copies them into its own group container,
+    /// where the Flutter side reads them as on iOS.
+    private func updateRunFileMirror(session: NETunnelProviderSession) {
+        switch session.status {
+        case .connected, .reasserting:
+            guard runFileMirrorTask == nil else { return }
+            runFileMirrorTask = Task { @MainActor [weak self] in
+                var tick = 0
+                while !Task.isCancelled {
+                    let names = tick % 10 == 0 ? Self.liveRunFiles + Self.slowRunFiles : Self.liveRunFiles
+                    await self?.mirrorRunFiles(session: session, names: names)
+                    tick += 1
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        default:
+            runFileMirrorTask?.cancel()
+            runFileMirrorTask = nil
+        }
+    }
+
+    private func mirrorRunFiles(session: NETunnelProviderSession, names: [String]) async {
+        guard let userGroup = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId()),
+              case let .runFiles(files)? = try? await sendTunnelRequest(session: session, .readRunFiles(names: names)) else {
+            return
+        }
+        let runDir = userGroup.adaptedAppendPath(path: "run")
+        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        for (name, content) in files where names.contains(name) {
+            try? content.write(to: runDir.adaptedAppendPath(path: name), options: .atomic)
         }
     }
 

@@ -14,6 +14,8 @@ import 'package:colitu_vpn/colitu/services/diagnostics_request_watcher.dart';
 import 'package:colitu_vpn/colitu/services/site_redaction.dart';
 import 'package:colitu_vpn/colitu/services/support_service.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
+import 'package:colitu_vpn/pages/colitu/passport/passport_host.dart';
+import 'package:colitu_vpn/pages/colitu/passport/passport_page.dart';
 import 'package:colitu_vpn/pages/colitu/paused/page.dart';
 import 'package:colitu_vpn/pages/colitu/shell/account_tab.dart';
 import 'package:colitu_vpn/pages/colitu/shell/home_tab.dart';
@@ -240,6 +242,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
             onOpenSplitTunnel: () =>
                 ColituSplitTunnelPage.open(context, _controller),
             onOpenSettings: () => _select(ColituTab.account),
+            onOpenPassport: () => PassportPage.open(context, _controller, _toggleConnection),
           ),
           ColituTab.locations => LocationsTab(
             controller: _controller,
@@ -256,7 +259,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
             focusPrivacy: _focusPrivacy,
           ),
         };
-        return ColituScaffold(
+        final scaffold = ColituScaffold(
           padding: EdgeInsets.zero,
           safeBottom: false,
           bottomNavigationBar: ColituNavBar(
@@ -281,6 +284,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
             child: KeyedSubtree(key: ValueKey(_tab), child: body),
           ),
         );
+        return PassportHost(controller: _controller, child: scaffold);
       },
     );
   }

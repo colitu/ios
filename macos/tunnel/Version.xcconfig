@@ -1,0 +1,8 @@
+// The system extension carries the app's version and build number:
+// SystemExtensionManager replaces the installed extension only when they
+// change. Only the Flutter build values are taken from the generated file
+// (no Pods settings: the extension links none of the app's plugins).
+#include "../Flutter/ephemeral/Flutter-Generated.xcconfig"
+
+MARKETING_VERSION = $(FLUTTER_BUILD_NAME)
+CURRENT_PROJECT_VERSION = $(FLUTTER_BUILD_NUMBER)

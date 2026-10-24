@@ -102,12 +102,20 @@ enum TunnelRequest: Codable {
     /// The app rewrote the core config (a warm-spare swap): restart only
     /// the core; the tunnel interface stays.
     case reloadCore
+    /// System extension only: the extension cannot read the app's group
+    /// container, so a warm-spare swap sends the rewritten core config first.
+    case writeCoreConfig(content: Data)
+    /// System extension only: the run files the extension writes (traffic
+    /// heartbeat, drops, stability log) live in root's group container; the
+    /// app copies them into its own container for the Flutter side.
+    case readRunFiles(names: [String])
 }
 
 enum TunnelResponse: Codable {
     case ok
     case datManifest([String: Int64])
     case error(String)
+    case runFiles([String: Data])
 }
 
 enum TunnelMessageCoder {

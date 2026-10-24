@@ -71,6 +71,9 @@ abstract final class APIEndpoint {
   static const clientAcEvents = '/client/ac-events';
   static const clientSurvey = '/client/survey';
 
+  /// Colitu Passport daily anonymous counters (no token, no device id).
+  static const passportMetrics = '/passport/metrics';
+
   static const subscription = '/billing/subscription';
 
   static const billingProducts = '/billing/catalog';

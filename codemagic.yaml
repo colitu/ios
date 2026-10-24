@@ -551,3 +551,326 @@ workflows:
         auth: integration
         submit_to_testflight: true
         submit_to_app_store: false
+
+  # Direct-download macOS app (like the Windows installer): Developer ID
+  # signed, notarized, packaged as a DMG for colitu.com/downloads/macos.
+  # The tunnel runs as a system extension (macos/, swift/macOSSE). One-time
+  # Apple Developer setup: docs/macos-release.md.
+  colitu-macos-direct:
+    name: Colitu macOS (Developer ID, notarized DMG)
+    instance_type: mac_mini_m1
+    max_build_duration: 120
+
+    integrations:
+      app_store_connect: codemagic
+
+    environment:
+      groups:
+        - TESTER
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        BUNDLE_ID: "com.colitu.vpn.se"
+        TUNNEL_BUNDLE_ID: "com.colitu.vpn.se.tun"
+        APP_GROUP_ID: "group.com.colitu.vpn.se"
+        TEAM_ID: "7C74T7SHR5"
+        COLITU_API_BASE_URL: "https://api.colitu.com/api/v1"
+
+    scripts:
+      - name: Prepare Flutter, icons, LibXray and FFI
+        script: |
+          set -e
+          set -x
+
+          flutter config --enable-macos-desktop
+          flutter pub get
+
+          python3 -m pip install --user Pillow
+          python3 scripts/generate-macos-icons.py
+
+          chmod +x scripts/build-libxray.sh
+          scripts/build-libxray.sh
+
+          chmod +x scripts/generate-ffi-bindings.sh
+          scripts/generate-ffi-bindings.sh
+
+          # The macOS slice must exist and carry the tunnel's C ABI (the
+          # build script checks the iOS slice only).
+          MAC_LIBRARY="$(python3 scripts/libxray-slice.py macos)"
+          test -n "$MAC_LIBRARY" && test -f "$MAC_LIBRARY" || { echo "LibXray.xcframework has no macOS slice"; exit 1; }
+          lipo -info "$MAC_LIBRARY"
+          for symbol in hev_socks5_tunnel_main_from_str CGoRunXrayFromJSON CGoGetXrayState CGoResetHysteria CGoSetTunFd; do
+            nm -g "$MAC_LIBRARY" | grep -Eq "[[:space:]]_?${symbol}$" || { echo "macOS LibXray is missing $symbol"; exit 1; }
+          done
+
+      - name: Set up Developer ID signing
+        script: |
+          set -e
+          set -x
+
+          if [ -z "${CERTIFICATE_PRIVATE_KEY_B64:-}" ] || [ -z "${CERTIFICATE_KEY_PASSWORD:-}" ]; then
+            echo "Missing CERTIFICATE_PRIVATE_KEY_B64 or CERTIFICATE_KEY_PASSWORD in TESTER variable group"
+            exit 1
+          fi
+
+          CERTS_DIR="$HOME/Library/MobileDevice/Certificates"
+          PROFILES_DOWNLOAD_DIR="$CM_BUILD_DIR/.codemagic/macos-profiles"
+          PROFILES_INSTALL_DIRS=(
+            "$HOME/Library/MobileDevice/Provisioning Profiles"
+            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          )
+          rm -rf "$CERTS_DIR" "$PROFILES_DOWNLOAD_DIR"
+          mkdir -p "$CERTS_DIR" "$PROFILES_DOWNLOAD_DIR" "${PROFILES_INSTALL_DIRS[@]}" "$CM_BUILD_DIR/.codemagic"
+
+          set +x
+          echo "$CERTIFICATE_PRIVATE_KEY_B64" | base64 --decode > "$CM_BUILD_DIR/.codemagic/certificate_private_key.pem"
+          chmod 600 "$CM_BUILD_DIR/.codemagic/certificate_private_key.pem"
+          openssl pkey -in "$CM_BUILD_DIR/.codemagic/certificate_private_key.pem" -noout >/dev/null
+          set -x
+
+          keychain initialize
+
+          # Developer ID Application certificate + Developer ID profiles for
+          # the app and the system extension. Only the Account Holder can
+          # create a Developer ID certificate: make it once in the Apple
+          # Developer portal from a CSR of this private key (docs/macos-release.md).
+          set +x
+          for bundle in "$BUNDLE_ID" "$TUNNEL_BUNDLE_ID"; do
+            app-store-connect fetch-signing-files "$bundle" \
+              --type MAC_APP_DIRECT \
+              --platform MAC_OS \
+              --create \
+              --certificates-dir "$CERTS_DIR" \
+              --profiles-dir "$PROFILES_DOWNLOAD_DIR" \
+              --certificate-key "@file:$CM_BUILD_DIR/.codemagic/certificate_private_key.pem" \
+              --p12-password "$CERTIFICATE_KEY_PASSWORD"
+          done
+          keychain add-certificates --certificate "$CERTS_DIR/*.p12" --certificate-password "$CERTIFICATE_KEY_PASSWORD"
+          set -x
+
+          SIGNING_IDENTITY="$(security find-identity -v -p codesigning | grep "Developer ID Application" | grep "($TEAM_ID)" | head -n 1 | sed -E 's/^[^"]*"([^"]*)".*$/\1/')"
+          if [ -z "$SIGNING_IDENTITY" ]; then
+            echo "No 'Developer ID Application' identity for team $TEAM_ID in the keychain."
+            security find-identity -v -p codesigning || true
+            exit 1
+          fi
+          echo "Signing identity: $SIGNING_IDENTITY"
+
+          print_value() {
+            /usr/libexec/PlistBuddy -c "Print $2" "$1" 2>/dev/null || true
+          }
+
+          APP_PROFILE_UUID=""
+          TUNNEL_PROFILE_UUID=""
+          for profile in "$PROFILES_DOWNLOAD_DIR"/*.provisionprofile "$PROFILES_DOWNLOAD_DIR"/*.mobileprovision; do
+            [ -f "$profile" ] || continue
+            plist="$CM_BUILD_DIR/.codemagic/profile.plist"
+            security cms -D -i "$profile" > "$plist"
+            uuid="$(print_value "$plist" UUID)"
+            name="$(print_value "$plist" Name)"
+            team="$(print_value "$plist" TeamIdentifier:0)"
+            appid="$(print_value "$plist" Entitlements:com.apple.application-identifier)"
+            bundle="${appid#"$team".}"
+            echo "Profile: $name ($uuid) bundle=$bundle team=$team"
+            [ "$team" = "$TEAM_ID" ] || continue
+            for dir in "${PROFILES_INSTALL_DIRS[@]}"; do
+              cp "$profile" "$dir/$uuid.provisionprofile"
+            done
+
+            # The profile must carry what the entitlements ask for, or the
+            # build fails late with a vague codesign error.
+            entitlements="$(print_value "$plist" Entitlements)"
+            for needed in packet-tunnel-provider-systemextension "$APP_GROUP_ID"; do
+              if ! grep -q -- "$needed" <<< "$entitlements"; then
+                echo "Profile $name lacks $needed: enable Network Extensions, System Extension and App Groups ($APP_GROUP_ID) on $bundle (docs/macos-release.md), then rerun."
+                exit 1
+              fi
+            done
+            case "$bundle" in
+              "$BUNDLE_ID")
+                if ! grep -q "com.apple.developer.system-extension.install" <<< "$entitlements"; then
+                  echo "Profile $name lacks com.apple.developer.system-extension.install (System Extension capability on $BUNDLE_ID)"
+                  exit 1
+                fi
+                APP_PROFILE_UUID="$uuid"
+                ;;
+              "$TUNNEL_BUNDLE_ID")
+                TUNNEL_PROFILE_UUID="$uuid"
+                ;;
+            esac
+          done
+
+          if [ -z "$APP_PROFILE_UUID" ] || [ -z "$TUNNEL_PROFILE_UUID" ]; then
+            echo "Missing a Developer ID profile: app=$APP_PROFILE_UUID tunnel=$TUNNEL_PROFILE_UUID"
+            exit 1
+          fi
+
+          # The project names the profiles by placeholder; use the UUIDs.
+          PBXPROJ="macos/Runner.xcodeproj/project.pbxproj"
+          sed -i '' \
+            -e "s/\"Colitu macOS Direct App\"/\"$APP_PROFILE_UUID\"/g" \
+            -e "s/\"Colitu macOS Direct Tunnel\"/\"$TUNNEL_PROFILE_UUID\"/g" \
+            "$PBXPROJ"
+          grep -nE "PROVISIONING_PROFILE_SPECIFIER|CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM|PRODUCT_BUNDLE_IDENTIFIER" "$PBXPROJ"
+
+          EXPORT_OPTIONS="$CM_BUILD_DIR/.codemagic/macos_export_options.plist"
+          rm -f "$EXPORT_OPTIONS"
+          plutil -create xml1 "$EXPORT_OPTIONS"
+          plutil -insert method -string developer-id "$EXPORT_OPTIONS"
+          plutil -insert teamID -string "$TEAM_ID" "$EXPORT_OPTIONS"
+          plutil -insert signingStyle -string manual "$EXPORT_OPTIONS"
+          plutil -insert signingCertificate -string "Developer ID Application" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$BUNDLE_ID string $APP_PROFILE_UUID" "$EXPORT_OPTIONS"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$TUNNEL_BUNDLE_ID string $TUNNEL_PROFILE_UUID" "$EXPORT_OPTIONS"
+          plutil -p "$EXPORT_OPTIONS"
+
+          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$CM_ENV"
+          echo "EXPORT_OPTIONS=$EXPORT_OPTIONS" >> "$CM_ENV"
+
+      - name: Build, sign and export the app
+        script: |
+          set -e
+          set -x
+
+          PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | sed 's/version: *//')"
+          BUILD_NAME="$(echo "$PUBSPEC_VERSION" | cut -d+ -f1)"
+          PUBSPEC_BUILD_NUMBER="$(echo "$PUBSPEC_VERSION" | cut -d+ -f2)"
+          BUILD_NUMBER="${PROJECT_BUILD_NUMBER:-${BUILD_NUMBER:-${PUBSPEC_BUILD_NUMBER:-1}}}"
+          # The macOS app can carry its own version line: COLITU_MACOS_VERSION,
+          # set when starting the build, overrides pubspec.yaml.
+          BUILD_NAME="${COLITU_MACOS_VERSION:-$BUILD_NAME}"
+          echo "Building Colitu for macOS $BUILD_NAME ($BUILD_NUMBER)"
+
+          test "${COLITU_API_BASE_URL:-}" = "https://api.colitu.com/api/v1" || {
+            echo "COLITU_API_BASE_URL must target the production client API"
+            exit 1
+          }
+          case "${COLITU_ADBLOCK_DOH:-}" in
+            https://*) ;;
+            *) echo "Missing COLITU_ADBLOCK_DOH in TESTER variable group"; exit 1 ;;
+          esac
+          case "${COLITU_MIRRORS:-}" in
+            https://*) ;;
+            *) echo "Missing COLITU_MIRRORS in TESTER variable group"; exit 1 ;;
+          esac
+
+          # Compiles Dart, writes macos/Flutter/ephemeral (version, dart
+          # defines) and installs the pods; the archive below reuses that.
+          flutter build macos --release \
+            --build-name "$BUILD_NAME" \
+            --build-number "$BUILD_NUMBER" \
+            --dart-define="COLITU_API_BASE_URL=${COLITU_API_BASE_URL}" \
+            --dart-define="COLITU_ADBLOCK_DOH=${COLITU_ADBLOCK_DOH}" \
+            --dart-define="COLITU_MIRRORS=${COLITU_MIRRORS}"
+
+          ARCHIVE="$CM_BUILD_DIR/build/macos/Colitu.xcarchive"
+          EXPORT_DIR="$CM_BUILD_DIR/build/macos/export"
+          LOG_DIR="/tmp/xcodebuild_logs"
+          mkdir -p "$LOG_DIR"
+          rm -rf "$ARCHIVE" "$EXPORT_DIR"
+          set -o pipefail
+          xcodebuild \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -destination "generic/platform=macOS" \
+            -archivePath "$ARCHIVE" \
+            archive 2>&1 | tee "$LOG_DIR/macos-archive.log" | xcpretty
+          # The export re-signs every nested binary with a secure timestamp,
+          # which notarization requires.
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE" \
+            -exportPath "$EXPORT_DIR" \
+            -exportOptionsPlist "$EXPORT_OPTIONS" 2>&1 | tee "$LOG_DIR/macos-export.log" | xcpretty
+
+          APP="$EXPORT_DIR/Colitu.app"
+          SYSEXT="$APP/Contents/Library/SystemExtensions/$TUNNEL_BUNDLE_ID.systemextension"
+          if [ ! -d "$APP" ] || [ ! -d "$SYSEXT" ]; then
+            echo "Exported app or its system extension is missing"
+            find "$EXPORT_DIR" -maxdepth 5
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --entitlements :- "$APP" > "$CM_BUILD_DIR/.codemagic/app-entitlements.plist"
+          codesign -d --entitlements :- "$SYSEXT" > "$CM_BUILD_DIR/.codemagic/sysext-entitlements.plist"
+          cat "$CM_BUILD_DIR/.codemagic/app-entitlements.plist" "$CM_BUILD_DIR/.codemagic/sysext-entitlements.plist"
+          grep -q packet-tunnel-provider-systemextension "$CM_BUILD_DIR/.codemagic/sysext-entitlements.plist"
+          grep -q com.apple.developer.system-extension.install "$CM_BUILD_DIR/.codemagic/app-entitlements.plist"
+          # SystemExtensionManager replaces the installed extension only when
+          # its version changes.
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SYSEXT/Contents/Info.plist")" = "$BUILD_NAME"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$SYSEXT/Contents/Info.plist")" = "$BUILD_NUMBER"
+          lipo -info "$APP/Contents/MacOS/Colitu"
+
+          echo "BUILD_NAME=$BUILD_NAME" >> "$CM_ENV"
+          echo "COLITU_APP=$APP" >> "$CM_ENV"
+
+      - name: Notarize and package the DMG
+        script: |
+          set -e
+          set -x
+
+          DIST="$CM_BUILD_DIR/build/macos/dist"
+          rm -rf "$DIST"
+          mkdir -p "$DIST"
+          set +x
+          AUTH_KEY="$CM_BUILD_DIR/.codemagic/AuthKey_notary.p8"
+          printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$AUTH_KEY"
+          chmod 600 "$AUTH_KEY"
+          set -x
+
+          notarize() {
+            local file="$1"
+            local result="$CM_BUILD_DIR/.codemagic/notary-$(basename "$file").json"
+            xcrun notarytool submit "$file" \
+              --key "$AUTH_KEY" \
+              --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+              --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+              --wait --timeout 60m \
+              --output-format json | tee "$result"
+            local status id
+            status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$result")"
+            id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$result")"
+            if [ "$status" != "Accepted" ]; then
+              echo "Notarization of $(basename "$file") ended with status '$status'"
+              if [ -n "$id" ]; then
+                xcrun notarytool log "$id" --key "$AUTH_KEY" --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" --issuer "$APP_STORE_CONNECT_ISSUER_ID" || true
+              fi
+              exit 1
+            fi
+          }
+
+          # 1. The app: notarize, staple, zip.
+          ditto -c -k --keepParent "$COLITU_APP" "$CM_BUILD_DIR/.codemagic/Colitu-notarize.zip"
+          notarize "$CM_BUILD_DIR/.codemagic/Colitu-notarize.zip"
+          xcrun stapler staple "$COLITU_APP"
+          xcrun stapler validate "$COLITU_APP"
+          spctl --assess --type execute --verbose=4 "$COLITU_APP"
+          ditto -c -k --keepParent "$COLITU_APP" "$DIST/ColituVPN-$BUILD_NAME-macos.zip"
+
+          # 2. The DMG with the stapled app and an Applications link: signed,
+          # notarized and stapled too, so it opens without a warning offline.
+          STAGING="$CM_BUILD_DIR/.codemagic/dmg"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING"
+          ditto "$COLITU_APP" "$STAGING/Colitu.app"
+          ln -s /Applications "$STAGING/Applications"
+          DMG="$DIST/ColituVPN-$BUILD_NAME-macos.dmg"
+          hdiutil create -volname "Colitu" -srcfolder "$STAGING" -fs HFS+ -format UDZO -ov "$DMG"
+          codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+          notarize "$DMG"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+
+          rm -f "$AUTH_KEY"
+          (cd "$DIST" && shasum -a 256 *.dmg *.zip | tee SHA256SUMS.txt)
+          ls -lah "$DIST"
+
+    artifacts:
+      - build/macos/dist/*.dmg
+      - build/macos/dist/*.zip
+      - build/macos/dist/SHA256SUMS.txt
+      - /tmp/xcodebuild_logs/*.log

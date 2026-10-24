@@ -9,6 +9,7 @@ import 'package:colitu_vpn/colitu/api/models/auth_models.dart';
 import 'package:colitu_vpn/colitu/config/app_environment.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/passport/colitu_passport.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/auth_service.dart';
 import 'package:colitu_vpn/colitu/services/colitu_referral.dart';
@@ -129,6 +130,8 @@ class _ColituAuthPageState extends State<ColituAuthPage> {
           RegisterRequest(email: email, password: _password.text, invite: invite),
         );
         await ColituInvite.keepPending(null);
+        // Signed up with an invite code: the passport's Companion stamp.
+        if (invite != null) ColituPassport.I.social.markCompanion();
       } else {
         await AppSession.instance.login(
           LoginRequest(email: email, password: _password.text),

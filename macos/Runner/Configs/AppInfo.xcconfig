@@ -1,0 +1,12 @@
+// Application-level settings for the Runner target.
+
+// The application's name. By default this is also the title of the Flutter window.
+PRODUCT_NAME = Colitu
+
+// The application's bundle identifier. The direct (Developer ID) build runs
+// the packet tunnel as a system extension: com.colitu.vpn.se.tun, app group
+// group.com.colitu.vpn.se (swift/All/Constants.swift).
+PRODUCT_BUNDLE_IDENTIFIER = com.colitu.vpn.se
+
+// The copyright displayed in application information
+PRODUCT_COPYRIGHT = Copyright © 2026 COLITU LIMITED. All rights reserved.

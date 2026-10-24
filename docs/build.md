@@ -89,6 +89,9 @@ never in this repository:
 - `COLITU_ADBLOCK_DOH` — comma-separated DNS-over-HTTPS URLs of the
   ad-blocking servers (the build fails without it)
 
+The `colitu-macos-direct` workflow builds the macOS app (Developer ID,
+notarized DMG, system extension tunnel): see [macos-release.md](macos-release.md).
+
 Local fastlane lanes read their App Store Connect key from `.env` (see
 `.env.example`); the `.p8` file goes to `ios/fastlane/AuthKey.p8`, which is
 git-ignored.

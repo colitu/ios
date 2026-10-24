@@ -113,6 +113,11 @@ blocks a connect or a sign-up; every failure is ignored.
   optional "I have an invite code" field; a pasted `https://colitu.com/r/CODE`
   link is reduced to `CODE`. An invite link opened in the app
   (`/r/:code` route, `ColituInvite.handleLink`) keeps the code until sign-up.
+- `POST /passport/metrics` (Colitu Passport, once a day, only with the
+  passport's "Anonymous statistics" switch on, default off; sent without
+  token or device id) — `{ "v": 1, "platform": "ios", "stamps", "chapter", "levels": [bronze,
+  silver, gold, diamond], "expeditions", "pieces_today" (0-2),
+  "opened_today": true }`. Same body as Android `PassportSocial.metricsPayload`.
 - `POST /client/metrics` (at most every 6 h, only with "Anonymous usage
   statistics" on) — `{ "platform": "ios", "app_version", "counters": {non-zero
   of connect_attempts, connect_successes, first_connect_attempts,

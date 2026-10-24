@@ -38,12 +38,10 @@ Future<void> _initDesktopWindow() async {
   if (AppPlatform.isDesktop) {
     await windowManager.ensureInitialized();
 
-    const windowSize = Size(400, 600);
-    // mac store
-    // const windowSize = Size(1168, 688);
+    // The Colitu screens are laid out for a phone: a tall, narrow window.
     WindowOptions windowOptions = WindowOptions(
-      size: windowSize,
-      minimumSize: windowSize,
+      size: const Size(420, 760),
+      minimumSize: const Size(380, 620),
       center: true,
     );
     windowManager.waitUntilReadyToShow(windowOptions, () async {

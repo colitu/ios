@@ -11,6 +11,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/colitu/theme/particles.dart';
+import 'package:colitu_vpn/pages/colitu/passport/passport_art.dart';
 import 'package:colitu_vpn/pages/colitu/shell/invite_card.dart';
 import 'package:colitu_vpn/pages/colitu/shell/notice_banner.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
@@ -28,6 +29,7 @@ class HomeTab extends StatelessWidget {
     this.onOpenPrivacy,
     this.onOpenSplitTunnel,
     this.onOpenSettings,
+    this.onOpenPassport,
   });
 
   final ColituConnectionController controller;
@@ -43,6 +45,9 @@ class HomeTab extends StatelessWidget {
 
   /// Opens the settings (Simple mode's "Advanced settings on" line).
   final VoidCallback? onOpenSettings;
+
+  /// Opens Colitu Passport (the passport card).
+  final VoidCallback? onOpenPassport;
 
   @override
   Widget build(BuildContext context) {
@@ -265,6 +270,10 @@ class HomeTab extends StatelessWidget {
         _LocationCard(controller: c, onChange: onChangeLocation),
         const SizedBox(height: 12),
         _PlanCard(controller: c, onOpenPlan: onOpenPlan),
+        if (onOpenPassport != null && c.paused == null) ...[
+          const SizedBox(height: 12),
+          PassportCard(premium: c.planActive, onOpen: onOpenPassport!),
+        ],
         if (c.paused == null) ColituHomeInviteCard(connected: on),
         if (!c.advancedMode) ...[
           const SizedBox(height: 6),

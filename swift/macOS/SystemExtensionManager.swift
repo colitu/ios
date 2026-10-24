@@ -5,11 +5,32 @@ import SystemExtensions
 /// Each call constructs a one-shot driver around a single OSSystemExtensionRequest;
 /// no state is retained between calls.
 public enum SystemExtensionManager {
-    public static func isInstalled() async -> Bool {
+    /// With `matchingBundledVersion` only the extension shipped in this app
+    /// counts, so an app update activates its new extension.
+    public static func isInstalled(matchingBundledVersion: Bool = false) async -> Bool {
         guard let properties = try? await ExtensionRequestDriver().runProperties({ queue in
             OSSystemExtensionRequest.propertiesRequest(forExtensionWithIdentifier: packetTunnelId(), queue: queue)
         }) else { return false }
-        return properties.contains { !$0.isAwaitingUserApproval && !$0.isUninstalling }
+        let bundled = matchingBundledVersion ? bundledVersion() : nil
+        return properties.contains { extensionProperties in
+            guard extensionProperties.isEnabled,
+                  !extensionProperties.isAwaitingUserApproval,
+                  !extensionProperties.isUninstalling else { return false }
+            guard let bundled else { return true }
+            return extensionProperties.bundleShortVersion == bundled.short
+                && extensionProperties.bundleVersion == bundled.build
+        }
+    }
+
+    private static func bundledVersion() -> (short: String, build: String)? {
+        let url = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/SystemExtensions/\(packetTunnelId()).systemextension")
+        guard let bundle = Bundle(url: url),
+              let short = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String else {
+            return nil
+        }
+        return (short, build)
     }
 
     public static func activate(forceReplace: Bool = false) async throws -> OSSystemExtensionRequest.Result? {
