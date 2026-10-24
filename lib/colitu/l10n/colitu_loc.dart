@@ -2247,7 +2247,7 @@ class ColituLoc extends ChangeNotifier {
       'Today\'s pieces are collected. New ones come tomorrow at minute 10 and 60.',
     ],
     'passport.nx.level': [
-      'Марке «{country}» до уровня «{level}» осталось {n} ч. Части дня идут той стране, к которой вы подключены в этот момент.',
+      'Марке «{country}» до уровня «{level}» осталось частей: {n}. Части дня идут той стране, к которой вы подключены в этот момент.',
       '{country} pulu {level} seviyesine {n} parça uzakta. Günlük parçalar, o an bağlı olduğun ülkenin puluna gider.',
       'Your {country} stamp is {n} pieces from {level}. Each day\'s pieces go to the country you are connected to at that moment.',
     ],
@@ -2817,7 +2817,7 @@ class ColituLoc extends ChangeNotifier {
       'Today\'s pieces are collected',
     ],
     'passport.goal.level': [
-      '{country}: до уровня «{level}» {n} ч.',
+      '{country}: до уровня «{level}» — частей: {n}',
       '{country} {level} için {n} parça',
       '{country}: {n} pieces to {level}',
     ],
@@ -2917,12 +2917,12 @@ class ColituLoc extends ChangeNotifier {
       'Diamond complete',
     ],
     'passport.toMaster': [
-      'до полного бриллианта: {n} ч.',
+      'до полного бриллианта — частей: {n}',
       'Elmas\'ı tamamlamak için {n} parça',
       '{n} pieces to complete Diamond',
     ],
     'passport.toNext': [
-      'до уровня «{level}»: {n} ч.',
+      'до уровня «{level}» — частей: {n}',
       '{level} için {n} parça kaldı',
       '{n} pieces to {level}',
     ],
