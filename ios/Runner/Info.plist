@@ -44,6 +44,8 @@
 	<string>This app needs camera access to scan QR codes</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>This app needs photos access to get QR code from photo library</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Colitu saves the passport card you share to your photos only when you choose Save Image.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>

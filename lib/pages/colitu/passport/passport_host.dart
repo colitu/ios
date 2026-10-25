@@ -2,44 +2,49 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/passport/colitu_passport.dart';
-import 'package:colitu_vpn/colitu/passport/passport_sync.dart';
-import 'package:colitu_vpn/colitu/services/colitu_referral.dart';
+import 'package:colitu_vpn/colitu/passport/passport_client.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
+import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/passport/passport_reveal.dart';
 
 /// Runs Colitu Passport inside the signed-in shell (Android ColituApp.kt +
-/// PassportRevealHost): counts the minutes the tunnel recorded, tells the
-/// tunnel which country the connection counts for, keeps the tester flag
-/// and the city, grants the Companion stamp, sends the optional anonymous
-/// counters and plays the queued rewards one after another.
+/// PassportRevealHost). The passport lives on the account: this refreshes the
+/// cached copy on start, on every return to the foreground and after a
+/// connect, remembers the city under each stamp and plays the server's new
+/// events one after another, then acks them.
 class PassportHost extends StatefulWidget {
-  const PassportHost({super.key, required this.controller, required this.child});
+  const PassportHost({super.key, required this.controller, required this.child, this.client});
 
   final ColituConnectionController controller;
   final Widget child;
+
+  /// Tests pass their own; defaults to [PassportClient.I].
+  final PassportClient? client;
 
   @override
   State<PassportHost> createState() => _PassportHostState();
 }
 
 class _PassportHostState extends State<PassportHost> with WidgetsBindingObserver {
-  final _queue = <StampEvent>[];
+  final _queue = <PassportReveal>[];
   Timer? _poll;
   var _showing = false;
-  var _ticks = 0;
-  String? _writtenFor;
-  var _companionChecked = false;
   var _foreground = true;
+  var _wasConnected = false;
 
   ColituConnectionController get c => widget.controller;
+
+  PassportClient get _client => widget.client ?? PassportClient.I;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(_onController);
-    unawaited(_sync());
+    _wasConnected = c.connected;
+    unawaited(_refresh());
     _poll = Timer.periodic(const Duration(seconds: 2), (_) => _tick());
   }
 
@@ -53,71 +58,52 @@ class _PassportHostState extends State<PassportHost> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    final back = state == AppLifecycleState.resumed && !_foreground;
     _foreground = state == AppLifecycleState.resumed;
-    if (_foreground) unawaited(_sync());
+    // Back in the foreground: what the account earned meanwhile plays now.
+    if (back) unawaited(_refresh());
   }
 
   void _onController() {
-    final p = ColituPassport.I;
-    // Tester accounts see the panel's alpha nodes: a piece every ten minutes.
-    final tester = c.servers.any((s) => s.alpha);
-    if (p.tester != tester) p.tester = tester;
     final server = c.connectedServer;
     if (c.connected && server != null) {
-      p.rememberCity(server.countryCode, server.city);
-      final key = '${server.countryCode}|${p.notify}|${p.tester}';
-      if (key != _writtenFor) {
-        _writtenFor = key;
-        unawaited(PassportSync.writeConnection(server.countryCode));
-      }
-    } else if (!c.connected) {
-      _writtenFor = null;
+      ColituPassport.I.rememberCity(server.countryCode, server.city);
     }
-    if (!_companionChecked && c.user != null) {
-      _companionChecked = true;
-      unawaited(_companionAndMetrics());
-    }
+    if (c.connected && !_wasConnected) unawaited(_refresh());
+    _wasConnected = c.connected;
   }
 
-  /// Companion stamp for whoever invited someone; anonymous counters once a
-  /// day when turned on.
-  Future<void> _companionAndMetrics() async {
-    final social = ColituPassport.I.social;
-    if (!social.companion) {
-      try {
-        final referral = await ColituReferralService().load();
-        if (referral.invited > 0) social.markCompanion();
-      } catch (_) {}
-    }
-    await PassportSync.sendMetrics();
-  }
-
-  Future<void> _sync() async {
-    await PassportSync.consume();
+  Future<void> _refresh() async {
+    await _client.refresh();
     _tick();
   }
 
   void _tick() {
-    if (!mounted || !_foreground) return;
-    // Every 30 s the minutes the tunnel wrote since; rewards every 2 s.
-    if (++_ticks % 15 == 0) unawaited(PassportSync.consume());
-    if (_showing) return;
-    final p = ColituPassport.I;
-    if (_queue.isEmpty) _queue.addAll([...p.takePending(), ...p.goals.checkNew()]);
+    if (!mounted || !_foreground || _showing) return;
+    _queue.addAll(_client.takeReveals());
     if (_queue.isEmpty) return;
     unawaited(_showNext());
   }
 
+  /// Plays the queued reveals in order; acks once the queue is empty.
+  /// Something taken away plays nothing: one short notice for the batch.
   Future<void> _showNext() async {
     _showing = true;
+    var shown = 0;
+    var revoked = false;
     try {
       while (_queue.isNotEmpty && mounted) {
-        final event = _queue.removeAt(0);
-        await showPassportReward(context, event, premium: c.planActive);
+        final reveal = _queue.removeAt(0);
+        final event = reveal.event;
+        if (event != null) await showPassportReward(context, event, premium: c.planActive);
+        revoked |= reveal.revoked;
+        shown = reveal.id;
         ColituPassport.I.reload();
       }
     } finally {
       _showing = false;
+      if (shown > 0) unawaited(_client.ack(shown));
+      if (revoked && mounted) showColituToast(context, ColituLoc.I['passport.updated']);
     }
   }
 

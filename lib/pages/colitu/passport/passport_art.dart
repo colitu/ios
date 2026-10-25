@@ -772,7 +772,8 @@ NextGoal nextGoal() {
   final loc = ColituLoc.I;
   final p = ColituPassport.I;
   final (minutes, pieces) = p.today;
-  if (!p.tester && pieces < ColituPassport.pieceMinutes.length) {
+  // Today's piece only once the server reported today.
+  if (p.todayKnown && !p.tester && pieces < ColituPassport.pieceMinutes.length) {
     final next = ColituPassport.pieceMinutes[pieces];
     if (minutes < next) {
       return NextGoal(
@@ -791,7 +792,12 @@ NextGoal nextGoal() {
   }
   final level = best?.value.level;
   if (best == null || level == null) {
-    return NextGoal(loc['passport.goal.done'], 1, CupertinoIcons.checkmark);
+    if (p.progress.isEmpty) return NextGoal(loc['passport.goal.first'], 0, CupertinoIcons.star_fill);
+    // "Today's pieces are collected" only when the server said so.
+    if (p.todayKnown && (p.tester || pieces >= ColituPassport.pieceMinutes.length)) {
+      return NextGoal(loc['passport.goal.done'], 1, CupertinoIcons.checkmark);
+    }
+    return NextGoal(loc['passport.goal.mastered'], 1, CupertinoIcons.checkmark);
   }
   final target = level == StampLevel.diamond ? levelName(level) : levelName(StampLevel.values[level.index + 1]);
   return NextGoal(

@@ -6,12 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
 import 'package:colitu_vpn/colitu/passport/passport_store.dart';
 
-// Colitu Passport rules, ported one to one from the Android app
-// (colitu/data/ColituPassport.kt, PassportGoals.kt, PassportWeekly.kt,
-// PassportSocial.kt). Same constants, same keys, same order of steps, so a
-// passport behaves the same on every platform. Made and kept only on this
-// device; nothing about it is sent anywhere (the optional anonymous counters
-// carry totals only).
+// Colitu Passport model (Android colitu/data/ColituPassport.kt,
+// PassportGoals.kt, PassportWeekly.kt, PassportSocial.kt). Since v2 the
+// passport lives on the server, per account: the server counts the minutes
+// from the nodes' traffic reports and evaluates every rule. The app keeps the
+// last server state in [PassportStore] (see PassportServerState.applyTo) for
+// offline display, plays the reveals of the server's events and sends
+// cosmetic choices. Friends, the cities under the stamps and the sound and
+// haptics switches stay on this device.
 
 /// One passport stamp: the country it stands for and its printed number.
 @immutable
@@ -283,15 +285,13 @@ class DuelPassport {
   );
 }
 
-/// Colitu Passport. The tunnel extension writes one line per connected
-/// minute (see PassportTickLog); the app replays them through [tick] and
-/// shows the queued rewards with their animations.
+/// Colitu Passport as the server last reported it (see PassportClient).
 ///
-/// Rules: five minutes in a row in a country unlock its Bronze stamp. Every
-/// day the 10th and the 60th minute of use each add one puzzle piece to the
-/// stamp of the country connected at that minute, at most two a day across
-/// all servers. Tester accounts (they see the panel's alpha nodes) get a
-/// piece every ten minutes without the daily cap.
+/// Rules (evaluated on the server): five minutes in a row in a country
+/// unlock its Bronze stamp. Every day the 10th and the 60th minute of use
+/// each add one puzzle piece to the stamp of the country of that minute, at
+/// most two a day. Tester accounts get a piece every ten minutes without the
+/// daily cap. The constants below only describe the rules on screen.
 class ColituPassport extends ChangeNotifier {
   ColituPassport({PassportStore? store, DateTime Function()? clock, math.Random? random})
     : store = store ?? PassportStore(),
@@ -311,12 +311,6 @@ class ColituPassport extends ChangeNotifier {
   static const pieceMinutes = [10, 60];
   static const testerEvery = 10;
 
-  /// Two minutes further apart than this start a new run. Android's VPN
-  /// service ticks every minute through core restarts and reconnects; the
-  /// iOS tunnel keeps counting through outages up to three minutes but can
-  /// itself be restarted by iOS, so up to four minutes between two lines
-  /// still count as one run (the tunnel uses the same limit).
-  static const runGapMs = 240000;
 
   static List<ColituStamp> _chapter(List<String> codes, int first) => [
     for (var i = 0; i < codes.length; i++) ColituStamp(codes[i], first + i),
@@ -354,8 +348,8 @@ class ColituPassport extends ChangeNotifier {
   late final weekly = PassportWeekly._(this);
   late final social = PassportSocial._(this);
 
-  /// A passport notification was tapped; the shell opens the passport.
-  var openRequested = false;
+  /// Sends a changed nickname, title or cover to the account (PassportClient).
+  void Function(Map<String, Object?> fields)? profileSink;
 
   // ── State ───────────────────────────────────────────────────────────────
 
@@ -374,9 +368,13 @@ class ColituPassport extends ChangeNotifier {
 
   StampProgress progressOf(String code) => _read(code);
 
-  /// Minutes of use today and pieces already earned today.
+  /// The server reported today's minutes (for this local day).
+  bool get todayKnown => fromServer && store.getString('day') == dayKey(now());
+
+  /// Minutes of use today and pieces already earned today; (0, 0) until the
+  /// server reported this day.
   (int, int) get today {
-    if (store.getString('day') != dayKey(now())) return (0, 0);
+    if (!todayKnown) return (0, 0);
     return (store.getInt('day_min'), store.getInt('day_pieces'));
   }
 
@@ -390,16 +388,13 @@ class ColituPassport extends ChangeNotifier {
   /// Chapter 02 is open: every Chapter 01 stamp collected.
   bool get chapter2Open => stamps.every((s) => _read(s.code).unlocked);
 
+  /// Tester account (the server's flag): a piece every ten minutes.
   bool get tester => store.getBool('tester');
 
   set tester(bool value) => store.setBool('tester', value);
 
-  bool get notify => store.getBool('notify', true);
-
-  set notify(bool value) {
-    store.setBool('notify', value);
-    notifyListeners();
-  }
+  /// The server has answered at least once: its lists are the truth.
+  bool get fromServer => store.getInt('srv_at') > 0;
 
   /// Every country with a stamp record, this chapter or not.
   bool unlockedAnywhere(String code) => store.getInt('t_$code') > 0;
@@ -417,149 +412,13 @@ class ColituPassport extends ChangeNotifier {
     store.setString('city_$code', city);
   }
 
-  // ── Rules ───────────────────────────────────────────────────────────────
-
-  /// One minute of a running tunnel to [countryCode] that ended at [at]
-  /// (epoch ms; defaults to now). Returns the rewards it produced (also
-  /// queued for the app).
-  List<StampEvent> tick(String? countryCode, {int? at}) {
-    final code = normalize(countryCode);
-    if (code == null) return const [];
-    final t = at ?? now().millisecondsSinceEpoch;
-    final date = DateTime.fromMillisecondsSinceEpoch(t);
-    final events = <StampEvent>[];
-    final day = dayKey(date);
-    if (store.getString('day') != day) {
-      store.setString('day', day);
-      store.setInt('day_min', 0);
-      store.setInt('day_pieces', 0);
-    }
-    // Minutes in a row in one country; a gap over [runGapMs] or another country starts over.
-    final last = store.getInt('last_tick');
-    final gap = t - last;
-    final sameRun = store.getString('run_cc') == code && gap >= 1 && gap <= runGapMs;
-    final run = sameRun ? store.getInt('run_min') + 1 : 1;
-    store.setString('run_cc', code);
-    store.setInt('run_min', run);
-    store.setInt('last_tick', t);
-    store.setInt('m_$code', store.getInt('m_$code') + 1);
-
-    if (store.getInt('t_$code') == 0 && run >= unlockMinutes) {
-      store.setInt('t_$code', t);
-      events.add(StampEvent.unlocked(code));
-      _weeklyUnlock(code, date);
-    }
-
-    final minutes = store.getInt('day_min') + 1;
-    store.setInt('day_min', minutes);
-    _countForAchievements(code, minutes, t, date);
-    if (minutes == 10) weekly.bump(ExpeditionGoal.days10, date: date);
-    final earns = tester ? minutes % testerEvery == 0 : pieceMinutes.contains(minutes);
-    if (earns) {
-      // The piece goes to this country, or to the last unlocked one when this stamp is still locked.
-      final target = store.getInt('t_$code') > 0 ? code : store.getString('last_unlocked');
-      if (target != null) {
-        events.addAll(_addPiece(target, date));
-        store.setInt('day_pieces', store.getInt('day_pieces') + 1);
-      }
-    }
-    if (store.getInt('t_$code') > 0) store.setString('last_unlocked', code);
-    _enqueue(events);
-    return events;
-  }
-
-  /// Night (00-05) and early (05-07) minutes per day, the countries used in
-  /// the last seven days and the days that reached 60 minutes.
-  void _countForAchievements(String code, int minutes, int t, DateTime date) {
-    final day = dayKey(date);
-    void dayCounter(String key) {
-      if (store.getString('${key}_day') != day) {
-        store.setString('${key}_day', day);
-        store.setInt('${key}_min', 0);
-      }
-      final n = store.getInt('${key}_min') + 1;
-      store.setInt('${key}_min', n);
-      if (n >= 10 && store.getInt('a_$key') == 0) store.setInt('a_$key', t);
-    }
-
-    if (date.hour < 5) {
-      dayCounter('night');
-    } else if (date.hour < 7) {
-      dayCounter('early');
-    }
-
-    final today = epochDay(date);
-    store.setInt('d_$code', today);
-    final codes = {...(store.getString('codes') ?? '').split(',').where((c) => c.isNotEmpty), code}.toList();
-    store.setString('codes', codes.join(','));
-    final recent = codes.where((c) => today - store.getInt('d_$c', -100) < 7).length;
-    if (recent >= 5 && store.getInt('a_globe') == 0) store.setInt('a_globe', t);
-
-    if (minutes == 60) {
-      final days = store.getInt('days60') + 1;
-      store.setInt('days60', days);
-      if (days >= 7 && store.getInt('a_longhaul') == 0) store.setInt('a_longhaul', t);
-    }
-  }
-
-  void _weeklyUnlock(String code, DateTime date) {
-    weekly.bump(ExpeditionGoal.newCountry, date: date);
-    if (PassportCollection.values.any((c) => c.codes.contains(code))) {
-      weekly.bump(ExpeditionGoal.setStamp, date: date);
-    }
-  }
-
-  List<StampEvent> _addPiece(String code, DateTime date) {
-    weekly.bump(ExpeditionGoal.pieces, date: date);
-    final before = _read(code);
-    final pieces = before.pieces + 1;
-    store.setInt('p_$code', pieces);
-    final after = before.copyWith(pieces: pieces);
-    return [
-      StampEvent.piece(code, after.levelPieces == 0 ? StampProgress.pieceCount : after.levelPieces),
-      if (after.mastered && !before.mastered)
-        StampEvent.mastered(code)
-      else if (after.level != before.level)
-        StampEvent.levelUp(code, after.level!),
-    ];
-  }
-
-  void _enqueue(List<StampEvent> events) {
-    if (events.isEmpty) return;
-    final old = store.getString('pending') ?? '';
-    final added = events.map((e) => e.encode()).join(';');
-    store.setString('pending', old.isEmpty ? added : '$old;$added');
-  }
-
-  /// Rewards earned since the app last looked, oldest first; clears the queue.
-  List<StampEvent> takePending() {
-    final raw = store.getString('pending') ?? '';
-    store.remove('pending');
-    return raw.split(';').map(StampEvent.decode).whereType<StampEvent>().toList();
-  }
-
-  // ── Tester tools (alpha accounts only; same queue as real rewards) ──────
-
-  /// One more piece for [code] (unlocking it first).
-  void debugPiece(String code) {
-    final t = now().millisecondsSinceEpoch;
-    final events = <StampEvent>[];
-    if (store.getInt('t_$code') == 0) {
-      store.setInt('t_$code', t);
-      events.add(StampEvent.unlocked(code));
-      _weeklyUnlock(code, now());
-    } else {
-      events.addAll(_addPiece(code, now()));
-    }
-    _enqueue(events);
-    reload();
-  }
+  // ── Demo (tests and screenshots) ────────────────────────────────────────
 
   /// A demo passport with every level, or an empty one.
+  @visibleForTesting
   void debugCycle() {
     final t = now().millisecondsSinceEpoch;
     final keepTester = tester;
-    final keepNotify = notify;
     final collector = store.getString('collector_no');
     if (count > 0) {
       store.clear();
@@ -577,7 +436,6 @@ class ColituPassport extends ChangeNotifier {
       });
     }
     tester = keepTester;
-    store.setBool('notify', keepNotify);
     if (collector != null) store.setString('collector_no', collector);
     reload();
   }
@@ -587,7 +445,8 @@ class ColituPassport extends ChangeNotifier {
 }
 
 /// Achievements, collections and the passport identity (nickname, collector
-/// number, favourite stamp, title, cover). All on the device.
+/// number, favourite stamp, title, cover). The server's lists once it has
+/// answered; the favourite stamp stays on this device.
 class PassportGoals {
   PassportGoals._(this._p);
 
@@ -619,19 +478,21 @@ class PassportGoals {
 
   void updateNickname(String value) {
     final v = value.trim();
-    _save('nick', v.isEmpty ? null : (v.length > 20 ? v.substring(0, 20) : v));
+    final nick = v.isEmpty ? null : (v.length > 20 ? v.substring(0, 20) : v);
+    _save('nick', nick);
+    _p.profileSink?.call({'nickname': nick ?? ''});
   }
 
   void updateFavorite(String? code) => _save('favorite', code);
 
   void updateTitle(String? id) {
     _save('title', id);
-    _p.weekly.bump(ExpeditionGoal.customize);
+    _p.profileSink?.call({'title_id': id == null ? '' : id.replaceAll('_', '-')});
   }
 
   void updateCover(CoverTheme? theme) {
     _save('cover', theme?.key);
-    _p.weekly.bump(ExpeditionGoal.customize);
+    _p.profileSink?.call({'cover_id': theme?.key ?? ''});
   }
 
   void _save(String key, String? value) {
@@ -669,7 +530,16 @@ class PassportGoals {
 
   int _countAtLeast(StampLevel level) => _allCodes().where((c) => _levelIndex(c) >= level.index).length;
 
-  bool achieved(PassportAchievement a) => switch (a) {
+  /// A list the server sent (local ids), or null before its first answer.
+  Set<String>? _serverList(String key) {
+    if (!_p.fromServer) return null;
+    return (_store.getString(key) ?? '').split(',').where((id) => id.isNotEmpty).toSet();
+  }
+
+  bool achieved(PassportAchievement a) => _serverList('srv_ach')?.contains(a.id) ?? _achievedHere(a);
+
+  /// Before the server answered: what this device recorded (v1).
+  bool _achievedHere(PassportAchievement a) => switch (a) {
     PassportAchievement.first => _allCodes().any(_p.unlockedAnywhere),
     PassportAchievement.origin => ColituPassport.stamps.every((s) => _p.unlockedAnywhere(s.code)),
     PassportAchievement.nordicMaster => PassportCollection.nordic.codes.every((c) => _levelIndex(c) >= StampLevel.gold.index),
@@ -689,6 +559,8 @@ class PassportGoals {
   }
 
   bool completed(PassportCollection c) {
+    final server = _serverList('srv_col');
+    if (server != null) return server.contains(c.id);
     final (have, need) = progress(c);
     return have >= need;
   }
@@ -716,45 +588,12 @@ class PassportGoals {
     return a != null && achieved(a) ? a.title : null;
   }
 
-  /// Sets and achievements reached since the last call, each once (the app
-  /// plays their reveal). Chapters, expeditions, sets, then achievements.
-  List<StampEvent> checkNew() {
-    final t = _p.now().millisecondsSinceEpoch;
-    final out = <StampEvent>[];
-    // Chapter 02 opens: then the stamps of its countries recorded so far, one by one.
-    if (_p.chapter2Open && earnedAt('ch_2') == 0) {
-      _store.setInt('seen_ch_2', t);
-      out.add(const StampEvent.chapter('2'));
-      for (final s in ColituPassport.chapter2) {
-        if (_p.unlockedAnywhere(s.code)) out.add(StampEvent.unlocked(s.code));
-      }
-    }
-    if (chapter3Open && earnedAt('ch_3') == 0) {
-      _store.setInt('seen_ch_3', t);
-      out.add(const StampEvent.chapter('3'));
-    }
-    for (final goal in _p.weekly.takeNewlyDone()) {
-      out.add(StampEvent.expedition(goal.id));
-    }
-    for (final c in PassportCollection.values) {
-      if (completed(c) && earnedAt('c_${c.id}') == 0) {
-        _store.setInt('seen_c_${c.id}', t);
-        out.add(StampEvent.collected(c.id));
-      }
-    }
-    for (final a in PassportAchievement.values) {
-      if (achieved(a) && earnedAt('a_${a.id}') == 0) {
-        _store.setInt('seen_a_${a.id}', t);
-        out.add(StampEvent.achieved(a.id));
-      }
-    }
-    return out;
-  }
 }
 
 /// Weekly expeditions: three small goals a week, picked by a fixed rotation
-/// on the ISO week number (no randomness). Missing a week costs nothing; the
-/// rewards are visa stamps and, after five, the Pathfinder title.
+/// on the ISO week number (no randomness). The server counts the progress
+/// (the app reports shares); missing a week costs nothing. The rewards are
+/// visa stamps and, after five, the Pathfinder title.
 class PassportWeekly {
   PassportWeekly._(this._p);
 
@@ -769,7 +608,8 @@ class PassportWeekly {
   var _signature = '';
 
   void refresh() {
-    final now = '${_store.getString('wk_key')}|${ExpeditionGoal.values.map(progress).join(',')}|$total';
+    final now =
+        '${_store.getString('wk_key')}|${_store.getString('wk_goals')}|${ExpeditionGoal.values.map(progress).join(',')}|$total';
     if (now != _signature) {
       _signature = now;
       version++;
@@ -793,7 +633,7 @@ class PassportWeekly {
 
   String weekKey([DateTime? date]) => weekKeyOf(date ?? _p.now());
 
-  /// This week's three goals.
+  /// The rotation of the week of [date] (the server uses the same one).
   static List<ExpeditionGoal> goalsOf(DateTime date) {
     final (year, week) = isoWeek(date);
     final n = year * 53 + week;
@@ -801,54 +641,33 @@ class PassportWeekly {
     return [for (var i = 0; i < 3; i++) all[(n * 3 + i) % all.length]];
   }
 
-  List<ExpeditionGoal> goals([DateTime? date]) => goalsOf(date ?? _p.now());
+  /// The stored week ("2026-W43" or "2026-W5") is this week.
+  bool get _current {
+    final m = RegExp(r'^(\d{4})-W(\d{1,2})$').firstMatch(_store.getString('wk_key') ?? '');
+    return m != null && (int.parse(m[1]!), int.parse(m[2]!)) == isoWeek(_p.now());
+  }
 
-  void _syncWeek(DateTime date) {
-    final key = weekKeyOf(date);
-    if (_store.getString('wk_key') != key) {
-      for (final g in ExpeditionGoal.values) {
-        _store.remove('wk_${g.id}');
-      }
-      _store.setString('wk_key', key);
+  /// This week's three goals: the server's, else the rotation.
+  List<ExpeditionGoal> goals([DateTime? date]) {
+    if (date == null && _current) {
+      final ids = (_store.getString('wk_goals') ?? '').split(',');
+      final list = [for (final id in ids) ...ExpeditionGoal.values.where((g) => g.id == id)];
+      if (list.isNotEmpty) return list;
     }
+    return goalsOf(date ?? _p.now());
   }
 
-  int progress(ExpeditionGoal goal) {
-    if (_store.getString('wk_key') != weekKey()) return 0;
-    return _store.getInt('wk_${goal.id}');
-  }
+  int progress(ExpeditionGoal goal) => _current ? _store.getInt('wk_${goal.id}') : 0;
 
-  /// One step towards [goal]; counts only while it is one of this week's goals.
-  void bump(ExpeditionGoal goal, {DateTime? date}) {
-    final d = date ?? _p.now();
-    _syncWeek(d);
-    if (goalsOf(d).contains(goal)) _store.setInt('wk_${goal.id}', _store.getInt('wk_${goal.id}') + 1);
-    refresh();
-  }
-
-  bool done(ExpeditionGoal goal) => progress(goal) >= goal.target;
+  bool done(ExpeditionGoal goal) =>
+      progress(goal) >= goal.target || (_current && _store.getBool('wk_done_${goal.id}'));
 
   /// Expeditions finished over all weeks.
   int get total => _store.getInt('expeditions_done');
-
-  /// Goals of this week finished since the last call, each once.
-  List<ExpeditionGoal> takeNewlyDone() {
-    final key = weekKey();
-    final out = <ExpeditionGoal>[];
-    for (final g in goals()) {
-      if (done(g) && !_store.getBool('x_${key}_${g.id}')) {
-        _store.setBool('x_${key}_${g.id}', true);
-        _store.setInt('expeditions_done', total + 1);
-        out.add(g);
-      }
-    }
-    return out;
-  }
 }
 
-/// Friends, the Companion stamp and the passport's own settings. Everything
-/// is kept on this device; the optional anonymous counters carry no
-/// identifier at all.
+/// Friends, the Companion stamp and the passport's own settings. Friends and
+/// settings stay on this device; the Companion stamp comes from the server.
 class PassportSocial {
   PassportSocial._(this._p);
 
@@ -862,12 +681,10 @@ class PassportSocial {
   bool get showRanking => _store.getBool('friends_ranking', true);
   bool get sound => _store.getBool('sound', true);
   bool get haptics => _store.getBool('haptics', true);
-  bool get metrics => _store.getBool('metrics');
 
   void updateRanking(bool on) => _flag('friends_ranking', on);
   void updateSound(bool on) => _flag('sound', on);
   void updateHaptics(bool on) => _flag('haptics', on);
-  void updateMetrics(bool on) => _flag('metrics', on);
 
   void _flag(String key, bool on) {
     _store.setBool(key, on);
@@ -955,40 +772,6 @@ class PassportSocial {
   bool get companion => _store.getInt('special_$companionId') > 0;
 
   int companionAt() => _store.getInt('special_$companionId');
-
-  /// Whoever signed up with an invite code and whoever invited someone.
-  /// Queued like any reward so the app plays its reveal.
-  void markCompanion() {
-    if (companion) return;
-    _store.setInt('special_$companionId', _p.now().millisecondsSinceEpoch);
-    final old = _store.getString('pending') ?? '';
-    _store.setString('pending', old.isEmpty ? 'S|$companionId' : '$old;S|$companionId');
-    _p.reload();
-  }
-
-  // ── Anonymous counters ──────────────────────────────────────────────────
-
-  /// Today's counters for POST /api/v1/passport/metrics, once a day and only
-  /// when the user turned them on. Null when off or already sent today.
-  /// Totals only: no account, device or connection data.
-  Map<String, Object>? metricsPayload({String platform = 'ios'}) {
-    if (!metrics) return null;
-    if (_store.getString('metrics_day') == ColituPassport.dayKey(_p.now())) return null;
-    final progress = _p.progress.values;
-    final (_, pieces) = _p.today;
-    return {
-      'v': 1,
-      'platform': platform,
-      'stamps': progress.length,
-      'chapter': _p.goals.chapter3Open ? 3 : (_p.chapter2Open ? 2 : 1),
-      'levels': [for (final level in StampLevel.values) progress.where((p) => p.level == level).length],
-      'expeditions': _p.weekly.total,
-      'pieces_today': pieces.clamp(0, 2),
-      'opened_today': true,
-    };
-  }
-
-  void metricsSent() => _store.setString('metrics_day', ColituPassport.dayKey(_p.now()));
 
   /// Whether the first-visit intro has been shown.
   bool get introSeen => _store.getBool('intro_seen');

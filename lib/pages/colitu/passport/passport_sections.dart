@@ -389,11 +389,7 @@ class StampSheetBody extends StatelessWidget {
         final server = inCountry.where((s) => s.isAvailable).firstOrNull;
         final children = <Widget>[
           Center(
-            child: GestureDetector(
-              // Tester accounts: a long press earns one piece (with its animation).
-              onLongPress: p.tester ? () => p.debugPiece(stamp.code) : null,
-              child: StampArt(stamp: stamp, progress: progress, lockSize: 48, puzzle: true, live: true, size: 240),
-            ),
+            child: StampArt(stamp: stamp, progress: progress, lockSize: 48, puzzle: true, live: true, size: 240),
           ),
           const SizedBox(height: 10),
           Wrap(

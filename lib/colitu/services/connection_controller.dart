@@ -21,6 +21,7 @@ import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
+import 'package:colitu_vpn/colitu/passport/passport_client.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
@@ -3190,6 +3191,8 @@ class ColituConnectionController extends ChangeNotifier
     _recoveryEpoch++;
     _userDisconnected = true;
     await AppSession.instance.logout();
+    // The cached passport belonged to that account.
+    PassportClient.I.signedOut();
     await PreferencesKey().clearColituSelectedServerId();
     await _markDisconnected();
     status = ColituVpnStatus.disconnected;

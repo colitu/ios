@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
-import 'package:colitu_vpn/colitu/passport/passport_sync.dart';
+import 'package:colitu_vpn/colitu/passport/passport_client.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/storage/secure_token_store.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
@@ -47,7 +47,7 @@ class _ColituGatePageState extends State<ColituGatePage> {
       debugPrint('Privacy default failed: $error');
     }
     await ColituLoc.I.load();
-    await PassportSync.load();
+    await PassportClient.load();
     if (await SecureTokenStore().readTokens() != null &&
         await AppSession.instance.pendingVerificationEmail() != null) {
       if (mounted) context.go(RouterPath.colituVerify);

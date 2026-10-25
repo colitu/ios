@@ -52,8 +52,14 @@ void main() {
     p.goals.updateTitle('night');
     p.goals.updateFavorite('SE');
     p.rememberCity('SE', 'Stockholm');
-    // Today: 34 minutes, one piece so far.
+    // As the server would report it: the demo's achievements and sets, and
+    // today 34 minutes with one piece so far.
+    final achievements = [for (final a in PassportAchievement.values) if (p.goals.achieved(a)) a.id];
+    final sets = [for (final c in PassportCollection.values) if (p.goals.completed(c)) c.id];
     p.store
+      ..setString('srv_ach', achievements.join(','))
+      ..setString('srv_col', sets.join(','))
+      ..setInt('srv_at', 1)
       ..setString('day', ColituPassport.dayKey(now))
       ..setInt('day_min', 34)
       ..setInt('day_pieces', 1);
@@ -93,14 +99,14 @@ void main() {
 
   testWidgets('passport: home', skip: !comparePlatform, (tester) async {
     final c = _controller();
-    await pump(tester, PassportPage(controller: c, onConnect: () async {}, showIntro: false));
+    await pump(tester, PassportPage(controller: c, onConnect: () async {}, showIntro: false, refresh: () async => true));
     await shoot(tester, 'passport_home');
     c.dispose();
   });
 
   testWidgets('passport: home, stamps further down', skip: !comparePlatform, (tester) async {
     final c = _controller();
-    await pump(tester, PassportPage(controller: c, onConnect: () async {}, showIntro: false));
+    await pump(tester, PassportPage(controller: c, onConnect: () async {}, showIntro: false, refresh: () async => true));
     await tester.drag(find.byType(ListView), const Offset(0, -560));
     await tester.pump(const Duration(milliseconds: 900));
     await shoot(tester, 'passport_home_stamps');
@@ -111,7 +117,7 @@ void main() {
     ColituPassport.I = ColituPassport(store: PassportStore(), clock: () => now)
       ..store.setString('collector_no', '048213');
     final c = _controller();
-    await pump(tester, PassportPage(controller: c, onConnect: () async {}, showIntro: false));
+    await pump(tester, PassportPage(controller: c, onConnect: () async {}, showIntro: false, refresh: () async => true));
     await shoot(tester, 'passport_empty');
     c.dispose();
   });

@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
+import 'package:colitu_vpn/colitu/services/app_event_log.dart';
 import 'package:colitu_vpn/colitu/services/diagnostic_info_service.dart';
 import 'package:colitu_vpn/colitu/services/log_redaction.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
@@ -61,6 +62,7 @@ class TunnelDiagnosticsService {
         p.join(dir, 'goroutines.txt'),
         maxBytes: 24 << 10,
       ),
+      await _section('App events (app_events.log)', p.join(dir, AppEventLog.fileName), maxBytes: 16 << 10),
     ];
     return sections.join('\n\n');
   }

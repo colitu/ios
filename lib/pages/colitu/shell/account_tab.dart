@@ -598,14 +598,6 @@ class _AccountTabState extends State<AccountTab> {
           onTap: () => ColituInvitePage.open(context),
         ),
         const SizedBox(height: 8),
-        ColituActionRow(
-          key: const ValueKey('reviewRow'),
-          icon: CupertinoIcons.star,
-          title: loc['review.title'],
-          hint: loc['review.hint'],
-          onTap: () => _open('/review'),
-        ),
-        const SizedBox(height: 8),
         ColituSwitchRow(
           key: const ValueKey('statsSwitch'),
           icon: CupertinoIcons.chart_bar,

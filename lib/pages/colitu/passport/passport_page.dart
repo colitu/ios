@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/passport/colitu_passport.dart';
+import 'package:colitu_vpn/colitu/passport/passport_client.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/passport/passport_art.dart';
@@ -18,7 +19,13 @@ import 'package:colitu_vpn/pages/colitu/passport/passport_sections.dart';
 /// achievements) that open their own sheets, then the stamps of the chosen
 /// chapter. Rules and settings live behind the info button.
 class PassportPage extends StatefulWidget {
-  const PassportPage({super.key, required this.controller, required this.onConnect, this.showIntro = true});
+  const PassportPage({
+    super.key,
+    required this.controller,
+    required this.onConnect,
+    this.showIntro = true,
+    this.refresh,
+  });
 
   final ColituConnectionController controller;
 
@@ -27,6 +34,9 @@ class PassportPage extends StatefulWidget {
 
   /// Tests switch the first-visit intro off.
   final bool showIntro;
+
+  /// Fetches the account's passport; defaults to [PassportClient.I].
+  final Future<bool> Function()? refresh;
 
   static Future<void> open(BuildContext context, ColituConnectionController controller, Future<void> Function() onConnect) {
     return Navigator.of(context).push(
@@ -40,18 +50,35 @@ class PassportPage extends StatefulWidget {
 
 class _PassportPageState extends State<PassportPage> {
   var _chapter = 1;
+  Timer? _refreshTimer;
 
   ColituConnectionController get c => widget.controller;
+
+  /// While the passport is open: fresh on open, then every minute while
+  /// connected (the minutes are counted on the server).
+  static const refreshEvery = Duration(seconds: 60);
+
+  Future<bool> _refresh() => (widget.refresh ?? PassportClient.I.refresh)();
 
   @override
   void initState() {
     super.initState();
+    unawaited(_refresh());
+    _refreshTimer = Timer.periodic(refreshEvery, (_) {
+      if (c.connected) unawaited(_refresh());
+    });
     if (widget.showIntro && !ColituPassport.I.social.introSeen) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         unawaited(showPassportIntro(context, c.planActive).then((_) => ColituPassport.I.social.introSeen = true));
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   void _connect(VPNServer? server) {
@@ -109,7 +136,6 @@ class _PassportPageState extends State<PassportPage> {
               _Hero(
                 premium: c.planActive,
                 onEdit: () => PassportIdentityPage.open(context, c.planActive),
-                onLongPress: p.tester ? p.debugCycle : null,
               ),
               const SizedBox(height: 24),
               if (p.count == 0)
@@ -202,11 +228,10 @@ class _PassportPageState extends State<PassportPage> {
 
 /// Big cover, the count and the holder line; a tap edits the passport.
 class _Hero extends StatelessWidget {
-  const _Hero({required this.premium, required this.onEdit, this.onLongPress});
+  const _Hero({required this.premium, required this.onEdit});
 
   final bool premium;
   final VoidCallback onEdit;
-  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -222,7 +247,6 @@ class _Hero extends StatelessWidget {
           label: loc['passport.id.edit'],
           child: GestureDetector(
             onTap: onEdit,
-            onLongPress: onLongPress,
             child: SizedBox(
               width: coverHeight * 1.25,
               height: coverHeight * 1.25,
@@ -772,10 +796,8 @@ class _HowItWorks extends StatelessWidget {
               style: ColituText.small.copyWith(color: ColituColors.lilac),
             ),
             const SizedBox(height: 10),
-            toggle(loc['passport.notify'], p.notify, (v) => p.notify = v),
             toggle(loc['passport.set.sound'], social.sound, social.updateSound),
             toggle(loc['passport.set.haptics'], social.haptics, social.updateHaptics),
-            toggle(loc['passport.set.metrics'], social.metrics, social.updateMetrics, hint: loc['passport.set.metricsBody']),
             const SizedBox(height: 14),
             Text(loc['passport.local'], style: ColituText.small.copyWith(color: ColituColors.dim)),
           ],
@@ -803,11 +825,7 @@ class _SpecialStamps extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              GestureDetector(
-                // Tester accounts: a long press grants the Companion stamp (with its reveal).
-                onLongPress: p.tester ? social.markCompanion : null,
-                child: CompanionStamp(earned: social.companion, size: 96),
-              ),
+              CompanionStamp(earned: social.companion, size: 96),
               const SizedBox(width: 14),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 200),

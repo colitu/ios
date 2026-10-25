@@ -1810,16 +1810,6 @@ class ColituLoc extends ChangeNotifier {
       'Colitu VPN kullanıyorum: hızlı ve gizlilik odaklı. Bu bağlantıyla hesap açarsan {days} Premium kazanırsın: {link}',
       'I use Colitu VPN: fast and privacy-first. Sign up with this link and get {days} of Premium: {link}',
     ],
-    'review.title': [
-      'Оставьте отзыв о расширении',
-      'Eklentimize yorum bırak',
-      'Review our browser extension',
-    ],
-    'review.hint': [
-      'Короткий отзыв помогает другим найти Colitu.',
-      'Kısa bir yorum, başkalarının Colitu\'yu bulmasına çok yardım eder.',
-      'A short review helps others find Colitu.',
-    ],
     'stats.title': [
       'Статистика использования',
       'Kullanım istatistikleri',
@@ -2006,10 +1996,15 @@ class ColituLoc extends ChangeNotifier {
       'Yeni bir ülkedeki sunucuya bağlan, o ülkenin pulunu aç.',
       'Connect to a server in a new country to unlock its stamp.',
     ],
+    'passport.shareFailed': [
+      'Не удалось поделиться карточкой. Попробуйте ещё раз.',
+      'Kart paylaşılamadı. Tekrar dene.',
+      'Couldn’t share the card. Please try again.',
+    ],
     'passport.local': [
-      'Марки хранятся только на этом устройстве.',
-      'Pulların yalnızca bu cihazda saklanır.',
-      'Your stamps are stored only on this device.',
+      'Паспорт сохранён в вашем аккаунте и доступен на всех ваших устройствах.',
+      'Pasaportun hesabına kaydedilir, tüm cihazlarında seninle gelir.',
+      'Your passport is saved to your account and follows you to every device.',
     ],
     'passport.stampNo': [
       'Марка № {n}',
@@ -2082,24 +2077,14 @@ class ColituLoc extends ChangeNotifier {
       'Start',
     ],
     'passport.intro.body': [
-      'Каждая страна, к которой вы подключаетесь, оставляет марку. Всё хранится на вашем устройстве.',
-      'Bağlandığın her ülke bir pul bırakır. Her şey yalnızca cihazında saklanır.',
-      'Every country you connect to leaves a stamp. It all stays on your device.',
+      'Каждая страна, к которой вы подключаетесь, оставляет марку. Паспорт сохраняется в аккаунте и доступен на всех ваших устройствах.',
+      'Bağlandığın her ülke bir pul bırakır. Pasaportun hesabına kaydedilir, tüm cihazlarında seninle gelir.',
+      'Every country you connect to leaves a stamp. Your passport is saved to your account and follows you to every device.',
     ],
     'passport.intro.title': [
       'Ваш паспорт путешествий',
       'Seyahat pasaportun hazır',
       'Your travel passport',
-    ],
-    'passport.set.metricsBody': [
-      'Раз в день — только общие числа паспорта, без аккаунта и подключений.',
-      'Günde bir kez yalnızca pasaportun toplam sayıları gider; hesap ve bağlantı bilgisi yok.',
-      'Once a day, only the passport\'s totals; no account or connection data.',
-    ],
-    'passport.set.metrics': [
-      'Анонимная статистика',
-      'Anonim istatistik',
-      'Anonymous statistics',
     ],
     'passport.set.haptics': [
       'Вибрация',
@@ -2667,9 +2652,9 @@ class ColituLoc extends ChangeNotifier {
       'Title',
     ],
     'passport.id.nickHint': [
-      'Псевдоним, хранится только на устройстве',
-      'Takma ad, yalnızca cihazda saklanır',
-      'A nickname, kept only on this device',
+      'Псевдоним, сохраняется в аккаунте',
+      'Takma ad, hesabına kaydedilir',
+      'A nickname, saved to your account',
     ],
     'passport.id.nick': [
       'Имя в паспорте',
@@ -2791,11 +2776,6 @@ class ColituLoc extends ChangeNotifier {
       'ülke pulu toplandı',
       'country stamps collected',
     ],
-    'passport.notify': [
-      'Уведомления о частях',
-      'Parça bildirimleri',
-      'Piece notifications',
-    ],
     'passport.mins': [
       '{n} мин',
       '{n} dk',
@@ -2810,6 +2790,16 @@ class ColituLoc extends ChangeNotifier {
       'Сегодня: {m} мин · частей {p}/2',
       'Bugün: {m} dk · {p}/2 parça',
       'Today: {m} min · {p}/2 pieces',
+    ],
+    'passport.goal.mastered': [
+      'Все марки на уровне «Бриллиант»',
+      'Tüm pullar Elmas seviyesinde',
+      'Every stamp is at Diamond',
+    ],
+    'passport.updated': [
+      'Ваш паспорт обновлён',
+      'Pasaportun güncellendi',
+      'Your passport was updated',
     ],
     'passport.goal.done': [
       'Части на сегодня собраны',
@@ -2870,31 +2860,6 @@ class ColituLoc extends ChangeNotifier {
       'НОВАЯ МАРКА',
       'YENİ PUL',
       'NEW STAMP',
-    ],
-    'passport.n.levelBody': [
-      'Откройте паспорт, чтобы увидеть.',
-      'Görmek için pasaportunu aç.',
-      'Open your passport to see it.',
-    ],
-    'passport.n.pieceTitle': [
-      '+1 часть марки: {country}',
-      '{country} puluna 1 parça eklendi',
-      '+1 piece for your {country} stamp',
-    ],
-    'passport.n.unlockedBody': [
-      'Бронзовая марка добавлена в паспорт.',
-      'Bronz pul pasaportuna eklendi.',
-      'A Bronze stamp joined your passport.',
-    ],
-    'passport.n.unlockedTitle': [
-      'Новая марка: {country}',
-      'Yeni pul: {country}',
-      'New stamp: {country}',
-    ],
-    'passport.n.channel': [
-      'Паспорт Colitu',
-      'Colitu Pasaport',
-      'Colitu Passport',
     ],
     'passport.shareLevelText': [
       'Моя марка Colitu: {country}, {level}. colitu.com',

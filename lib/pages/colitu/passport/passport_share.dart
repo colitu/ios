@@ -1,16 +1,19 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:zxing2/qrcode.dart';
 
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/passport/colitu_passport.dart';
+import 'package:colitu_vpn/colitu/passport/passport_client.dart';
+import 'package:colitu_vpn/colitu/services/app_event_log.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
-import 'package:colitu_vpn/core/tools/file.dart';
 import 'package:colitu_vpn/pages/colitu/passport/passport_art.dart';
 
 /// QR matrix of [text] (true = dark module), or null when it does not fit.
@@ -108,13 +111,17 @@ Future<Uint8List> renderPassportCard({ColituStamp? stamp, required bool premium}
               ),
             )
             ..addText(value);
+      // A ParagraphBuilder builds once: a second build() touches a disposed
+      // native object and throws (every card failed that way). The same
+      // paragraph is laid out again at the card width instead.
       final paragraph = builder.build()..layout(const ui.ParagraphConstraints(width: 100000));
       if (paragraph.maxIntrinsicWidth > w - 120 && fontSize > 40) {
+        paragraph.dispose();
         fontSize -= 4;
         continue;
       }
-      final box = builder.build()..layout(const ui.ParagraphConstraints(width: w));
-      canvas.drawParagraph(box, Offset(0, baseline - box.alphabeticBaseline));
+      paragraph.layout(const ui.ParagraphConstraints(width: w));
+      canvas.drawParagraph(paragraph, Offset(0, baseline - paragraph.alphabeticBaseline));
       return;
     }
   }
@@ -203,26 +210,67 @@ String passportShareText(ColituStamp? stamp) {
       : loc.format('passport.shareStampText', {'country': country});
 }
 
-/// Renders the card and opens the system share sheet.
-Future<void> sharePassport(BuildContext context, {ColituStamp? stamp, required bool premium}) async {
-  final box = context.findRenderObject() as RenderBox?;
-  final origin = box != null && box.hasSize ? box.localToGlobal(Offset.zero) & box.size : null;
-  final bytes = await renderPassportCard(stamp: stamp, premium: premium);
-  ColituPassport.I.weekly.bump(ExpeditionGoal.share);
-  final dir = await FileTool.makeCacheDir();
-  final path = p.join(dir, 'colitu-passport.png');
-  await File(path).writeAsBytes(bytes);
+/// Where the share sheet is anchored: the tapped button when it is laid out,
+/// else a small rect in the middle of the screen (iPad and iOS 26 popovers
+/// need a non-empty one inside the view).
+@visibleForTesting
+Rect shareOrigin(BuildContext context) {
   try {
-    await SharePlus.instance.share(
+    final box = context.findRenderObject();
+    if (box is RenderBox && box.attached && box.hasSize && !box.size.isEmpty) {
+      final rect = box.localToGlobal(Offset.zero) & box.size;
+      if (!rect.isEmpty && rect.left >= 0 && rect.top >= 0) return rect;
+    }
+  } catch (_) {}
+  final views = WidgetsBinding.instance.platformDispatcher.views;
+  final view = views.isEmpty ? null : views.first;
+  final size = view == null ? const Size(390, 844) : view.physicalSize / view.devicePixelRatio;
+  return Rect.fromCenter(center: size.center(Offset.zero), width: 2, height: 2);
+}
+
+/// The folder of the shared card. Emptied at the start of the next share,
+/// never right after one (a share extension or "Save Image" may still read
+/// the file). Tests point it elsewhere.
+@visibleForTesting
+Future<Directory> Function() passportShareDir = () async =>
+    Directory(p.join((await getApplicationCacheDirectory()).path, 'passport-share'));
+
+/// Renders the card and opens the system share sheet; false when something
+/// failed (the user sees a short message, the connection report the step).
+Future<bool> sharePassport(BuildContext context, {ColituStamp? stamp, required bool premium}) async {
+  // Everything that needs the tapped button before the first await: a reveal
+  // closes right after the tap, a sheet may close too.
+  final origin = shareOrigin(context);
+  final toastContext = Navigator.maybeOf(context, rootNavigator: true)?.context;
+  final text = passportShareText(stamp);
+  var step = 'render';
+  try {
+    final bytes = await renderPassportCard(stamp: stamp, premium: premium);
+    step = 'file';
+    final dir = await passportShareDir();
+    if (await dir.exists()) await dir.delete(recursive: true);
+    await dir.create(recursive: true);
+    final name = stamp == null ? 'colitu-passport.png' : 'colitu-passport-${stamp.code.toLowerCase()}.png';
+    final path = p.join(dir.path, name);
+    await File(path).writeAsBytes(bytes, flush: true);
+    step = 'share';
+    final result = await SharePlus.instance.share(
       ShareParams(
-        files: [XFile(path, mimeType: 'image/png')],
-        text: passportShareText(stamp),
+        files: [XFile(path, mimeType: 'image/png', name: name)],
+        text: text,
         sharePositionOrigin: origin,
       ),
     );
+    if (result.status == ShareResultStatus.unavailable) throw StateError('share sheet unavailable');
+    // The weekly share goal is counted by the server.
+    if (result.status == ShareResultStatus.success) unawaited(PassportClient.I.share());
+    return true;
   } catch (error) {
-    debugPrint('Passport share: $error');
-  } finally {
-    await FileTool.deleteDirIfExists(dir);
+    debugPrint('Passport share ($step): $error');
+    unawaited(AppEventLog.add('passport_share_failed step=$step', error));
+    if (toastContext != null && toastContext.mounted) {
+      showColituToast(toastContext, ColituLoc.I['passport.shareFailed'], error: true);
+    }
+    return false;
   }
 }

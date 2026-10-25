@@ -113,11 +113,6 @@ blocks a connect or a sign-up; every failure is ignored.
   optional "I have an invite code" field; a pasted `https://colitu.com/r/CODE`
   link is reduced to `CODE`. An invite link opened in the app
   (`/r/:code` route, `ColituInvite.handleLink`) keeps the code until sign-up.
-- `POST /passport/metrics` (Colitu Passport, once a day, only with the
-  passport's "Anonymous statistics" switch on, default off; sent without
-  token or device id) — `{ "v": 1, "platform": "ios", "stamps", "chapter", "levels": [bronze,
-  silver, gold, diamond], "expeditions", "pieces_today" (0-2),
-  "opened_today": true }`. Same body as Android `PassportSocial.metricsPayload`.
 - `POST /client/metrics` (at most every 6 h, only with "Anonymous usage
   statistics" on) — `{ "platform": "ios", "app_version", "counters": {non-zero
   of connect_attempts, connect_successes, first_connect_attempts,
@@ -162,6 +157,45 @@ blocks a connect or a sign-up; every failure is ignored.
   speed | blocked | not_needed | other_vpn | technical | other; `comment` at most
   1000 characters (csat and churn); `conversation_id` travels with csat only.
   Closing the sheet sends `dismissed: true` and no answer.
+
+## Colitu Passport (v2, per account)
+
+The passport lives on the server (colitu-panel `docs/passport-server.md`): the
+server counts the minutes from the nodes' traffic reports and evaluates every
+rule. The app counts nothing (the tunnel extension has no passport code); it
+caches the last state for offline display (`PassportServerState.applyTo`),
+plays the reveals of the server's events and sends cosmetic choices.
+Signed-in client (Bearer, `X-Device-ID`); failures are ignored.
+
+- `GET /client/passport` — the state: `collector_no`, `nickname`, `title_id`,
+  `cover_id`, `tester`, `premium`, `chapter2_open`, `companion`, `today { day,
+  minutes, pieces, next_piece_at_minute }`, `run { country, minutes }`,
+  `stamps [{ country, unlocked_at, pieces, level, mastered }]`,
+  `achievements [{ id, earned_at }]`, `collections [{ id, earned_at }]`,
+  `covers`, `weekly { week, goals [{ id, target, progress, done }] }`,
+  `expeditions_done`, `unseen_events`, `updated_at`. Server ids use hyphens
+  (`nordic-master`, `gold-rush`); the app maps them to its underscore ids.
+  Fetched on app start and foreground, after a connect, when the passport
+  opens and every 60 s while it is open and connected.
+- `GET /client/passport/events?unseen=1` (only when `unseen_events` > 0) —
+  `{ "data": [{ id, kind, payload, created_at }] }`; kinds `stamp_unlocked`,
+  `piece`, `level_up`, `mastered`, `achievement`, `collection`,
+  `chapter_opened`, `weekly_done`, `companion`. Played in id order; unknown
+  kinds are skipped. Then `POST /client/passport/events/ack
+  { "through_id" }` → 204.
+- `PUT /client/passport/profile` — `{ nickname?, title_id?, cover_id?,
+  tz_offset_min }` (only the changed field; `""` clears it). The time zone is
+  sent once and again when it changes. Answers with the state.
+- `POST /client/passport/events { "kind": "share" }` → 204 when the Story card
+  is shared (weekly share goal).
+- `POST /client/passport/import` — once per device, before the first state
+  replaces the cache, when this device has v1 progress: `{ device_id, stamps
+  [{ country, pieces, unlocked_at }], achievements, collections,
+  expeditions_done, companion, nickname?, title_id?, cover_id? }`. Done on
+  success, on 409 `PASSPORT_ALREADY_IMPORTED` and on other 4xx (except 401,
+  408, 429); retried on network errors and 5xx. Answers with the merged state.
+- `POST /passport/metrics` is no longer called (v1 only). Sign-out clears the
+  cached passport (friends, cities and the sound/haptics switches stay).
 
 ## Not provided by the panel
 
