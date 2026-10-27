@@ -240,7 +240,7 @@ class ColituFreeQuota {
           json['limit_bytes'] ??
           json['dailyLimitBytes'] ??
           json['daily_limit_bytes'],
-      fallback: 209715200,
+      fallback: 1073741824,
     );
     final used = _intValue(
       json['usedBytes'] ??

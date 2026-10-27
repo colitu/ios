@@ -73,9 +73,12 @@ class _ColituPausedViewState extends State<ColituPausedView> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Text(
-            loc.format('paused.body', {
-              'devices': loc.count('device', pause.deviceLimit),
-            }),
+            // One device: the free plan or gifted Premium; say so plainly.
+            pause.deviceLimit <= 1
+                ? loc['paused.bodyFree']
+                : loc.format('paused.body', {
+                    'devices': loc.count('device', pause.deviceLimit),
+                  }),
             textAlign: TextAlign.center,
             style: ColituText.muted,
           ),

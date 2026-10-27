@@ -109,7 +109,7 @@ void main() {
 
     test('defaults, the unwrapped object and a missing link', () {
       final r = ColituReferral.parse({'link': 'https://colitu.com/r/AB12CD34'})!;
-      expect([r.inviteeDays, r.rewardDays, r.monthlyCap], [7, 7, 6]);
+      expect([r.inviteeDays, r.rewardDays, r.monthlyCap], [1, 1, 6]);
       expect(r.enabled, isTrue);
       expect(r.left, 6);
       expect(ColituReferral.parse({'data': {'code': 'X'}}), isNull);

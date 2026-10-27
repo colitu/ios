@@ -996,6 +996,27 @@ class ColituLoc extends ChangeNotifier {
     'plan.status.quota': ['ЛИМИТ ИСЧЕРПАН', 'KOTA DOLDU', 'LIMIT REACHED'],
     'plan.freeHint': ['1 ГБ каждый месяц', 'Her ay 1 GB', '1 GB every month'],
     'plan.upgrade': ['Перейти на безлимит', 'Sınırsız trafiğe geç', 'Go unlimited'],
+    'plan.freeLeft': ['осталось {left} из {limit}', '{left} / {limit} kaldı', '{left} of {limit} left'],
+    'plan.freeNear': [
+      'В этом месяце осталось {left}.',
+      'Bu ay {left} kaldı.',
+      '{left} left this month.',
+    ],
+    'plan.freeUsedUp': [
+      'Лимит {limit} на этот месяц исчерпан. Новый лимит — {date}.',
+      'Bu ayki {limit} hakkınız bitti. Yeni hakkınız {date} tarihinde.',
+      'Your {limit} for this month is used up. Your next allowance comes on {date}.',
+    ],
+    'plan.freeUsedUpLater': [
+      'Лимит {limit} на этот месяц исчерпан. Новый лимит — в следующем месяце.',
+      'Bu ayki {limit} hakkınız bitti. Yeni hakkınız gelecek ay.',
+      'Your {limit} for this month is used up. Your next allowance comes next month.',
+    ],
+    'plan.premiumPitch': [
+      'Premium: безлимитный трафик и больше устройств.',
+      'Premium: sınırsız trafik, daha fazla cihaz.',
+      'Premium: unlimited traffic, more devices.',
+    ],
     'reset.done': ['Пароль изменён. Вы вошли в аккаунт.', 'Şifreniz değiştirildi, giriş yaptınız.', 'Your password was changed and you’re signed in.'],
     'auth.expired': [
       'Сеанс завершён. Войдите снова.',
@@ -1065,9 +1086,9 @@ class ColituLoc extends ChangeNotifier {
       'Too many attempts. Please wait a minute.',
     ],
     'err.deviceLimit': [
-      'Достигнут лимит устройств вашего тарифа. Отключите старое устройство на colitu.com/devices или добавьте место в тариф.',
-      'Paketinizin cihaz sınırına ulaşıldı. colitu.com/devices adresinden eski bir cihazı kaldırın veya paketinize cihaz ekleyin.',
-      'Your plan’s device limit is reached. Remove an old device at colitu.com/devices or add a seat to your plan.',
+      'Достигнут лимит устройств вашего тарифа: бесплатный тариф и подаренный Premium — это одно устройство. Отключите старое устройство на colitu.com/devices. Premium: безлимитный трафик и больше устройств.',
+      'Paketinizin cihaz sınırına ulaşıldı: ücretsiz plan ve hediye Premium 1 cihaz içindir. colitu.com/devices adresinden eski bir cihazı kaldırın. Premium: sınırsız trafik, daha fazla cihaz.',
+      'Your plan’s device limit is reached: the free plan and gifted Premium cover 1 device. Remove an old device at colitu.com/devices. Premium: unlimited traffic, more devices.',
     ],
     'err.noPlan': [
       'Тариф не активен. Выберите тариф, чтобы подключиться.',
@@ -1594,9 +1615,14 @@ class ColituLoc extends ChangeNotifier {
     ],
     'paused.premium': ['Получить Premium', 'Premium\'a geç', 'Get Premium'],
     'paused.premiumHint': [
-      'С Premium можно пользоваться несколькими устройствами одновременно.',
-      'Premium ile birden fazla cihazı aynı anda kullanabilirsiniz.',
-      'Premium lets you use several devices at the same time.',
+      'Premium: безлимитный трафик и несколько устройств одновременно.',
+      'Premium: sınırsız trafik, aynı anda birden fazla cihaz.',
+      'Premium: unlimited traffic and several devices at the same time.',
+    ],
+    'paused.bodyFree': [
+      'Бесплатный тариф и подаренный Premium — это одно устройство одновременно. Пока это устройство приостановлено, VPN на нём не подключается.',
+      'Ücretsiz plan ve hediye Premium aynı anda 1 cihaz içindir. Bu cihaz duraklatılmışken VPN bağlanmaz.',
+      'The free plan and gifted Premium cover 1 device at a time. While this device is paused, the VPN does not connect on it.',
     ],
     'paused.activated': ['Это устройство снова активно', 'Bu cihaz yeniden etkin', 'This device is active again'],
     'paused.device': ['Устройство', 'Cihaz', 'Device'],
@@ -1686,9 +1712,9 @@ class ColituLoc extends ChangeNotifier {
       'Code or colitu.com/r/… link',
     ],
     'invite.came': [
-      'Вы пришли по приглашению: 7 дней Premium после подтверждения e-mail',
-      'Davetle geldiniz: e-postanızı doğrulayınca 7 gün Premium',
-      'You came with an invite: 7 days of Premium once you verify your e-mail',
+      'Вы пришли по приглашению: вы и ваш друг получите по 1 дню Premium. Ваш день начнётся после подтверждения e-mail.',
+      'Davetle geldiniz: sen ve arkadaşın 1’er gün Premium kazanırsınız. Seninki e-postanı doğrulayınca başlar.',
+      'You came with an invite: you and your friend each get 1 day of Premium. Yours starts once you verify your e-mail.',
     ],
     'invite.kicker': [
       'ПРИГЛАШЕНИЕ',
@@ -1701,14 +1727,14 @@ class ColituLoc extends ChangeNotifier {
       'Invite a friend',
     ],
     'invite.rowHint': [
-      'Друг получит Premium, вы тоже',
-      'Arkadaşın Premium kazanır, sen de',
-      'Your friend gets Premium, and so do you',
+      'Вы и друг получите по 1 дню Premium',
+      'Sen ve arkadaşın 1’er gün Premium kazanırsınız',
+      'You and your friend each get 1 day of Premium',
     ],
     'invite.sub': [
-      'Поделитесь ссылкой: когда друг создаст аккаунт, дни Premium получите вы оба.',
-      'Bağlantını paylaş: arkadaşın hesap açınca ikiniz de Premium günü kazanırsınız.',
-      'Share your link: when a friend opens an account, you both get Premium days.',
+      'Поделитесь ссылкой: когда друг создаст аккаунт, вы и ваш друг получите по 1 дню Premium.',
+      'Bağlantını paylaş: arkadaşın hesap açınca sen ve arkadaşın 1’er gün Premium kazanırsınız.',
+      'Share your link: when a friend opens an account, you and your friend each get 1 day of Premium.',
     ],
     'invite.link': [
       'Ваша ссылка-приглашение',
@@ -1791,9 +1817,9 @@ class ColituLoc extends ChangeNotifier {
       'The invite programme is switched off right now.',
     ],
     'invite.cardBody': [
-      'Вам обоим — {days} Premium',
-      'İkinize de {days} Premium',
-      '{days} of Premium for both of you',
+      'Вам и другу — Premium на {days}',
+      'Sen ve arkadaşın {days} Premium kazanırsınız',
+      'You and your friend each get {days} of Premium',
     ],
     'invite.telegram': [
       'Telegram',

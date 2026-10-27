@@ -522,14 +522,23 @@ class _PlanCard extends StatelessWidget {
     final expires = user?.expiresAt;
     final quota = user?.freeQuota;
     final hasQuota = quota != null && quota.limitBytes > 0;
-    final detail = !active
+    final free = isFreePlan(user);
+    final freeState = freeQuotaStateOf(user);
+    final usedUp = free && freeState == FreeQuotaState.usedUp;
+    final near = free && freeState == FreeQuotaState.near;
+    final detail = free
+        ? freePlanDetailOf(user)
+        : !active
         ? loc['plan.noneHint']
-        : isFreePlan(user)
-        ? loc['plan.freeHint']
         : [
             if (expires != null) planLeftOf(expires),
             if (!hasQuota) loc['home.unlimited'],
           ].join(' · ');
+    final barColor = usedUp
+        ? ColituColors.danger
+        : near
+        ? ColituColors.warning
+        : ColituColors.lilac;
     return ColituPanel(
       onTap: onOpenPlan,
       padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
@@ -559,7 +568,10 @@ class _PlanCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        if (!active) ...[
+                        if (usedUp) ...[
+                          const SizedBox(width: 8),
+                          ColituBadge(loc['plan.status.quota'], tone: ColituBadgeTone.danger),
+                        ] else if (!active) ...[
                           const SizedBox(width: 8),
                           ColituBadge(loc['plan.status.$status'], tone: ColituBadgeTone.danger),
                         ],
@@ -577,13 +589,16 @@ class _PlanCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
-              ColituButton.secondary(
-                label: loc['plan.manage'],
-                onPressed: onOpenPlan,
-                expand: false,
-                height: 36,
-              ),
+              // Near or at the free limit the wide button below takes over.
+              if (!near && !usedUp) ...[
+                const SizedBox(width: 8),
+                ColituButton.secondary(
+                  label: loc['plan.manage'],
+                  onPressed: onOpenPlan,
+                  expand: false,
+                  height: 36,
+                ),
+              ],
             ],
           ),
           if (hasQuota) ...[
@@ -591,19 +606,44 @@ class _PlanCard extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(ColituRadius.pill),
               child: LinearProgressIndicator(
-                value: quota.usedRatio,
+                value: usedUp ? 1 : quota.usedRatio,
                 minHeight: 5,
                 backgroundColor: ColituColors.glass10,
-                valueColor: const AlwaysStoppedAnimation(ColituColors.lilac),
+                valueColor: AlwaysStoppedAnimation(barColor),
               ),
             ),
-            const SizedBox(height: 5),
+            // The free plan's line above already says what is left.
+            if (!free) ...[
+              const SizedBox(height: 5),
+              Text(
+                '${loc['home.traffic']}: ${loc.format('home.trafficOf', {
+                  'used': loc.bytes(quota.usedBytes),
+                  'limit': loc.bytes(quota.limitBytes),
+                })}',
+                style: ColituText.small,
+              ),
+            ],
+          ],
+          // Free plan close to or at its monthly allowance: say so plainly,
+          // name what Premium adds and point to the plan page in the app
+          // (no prices or purchase links here).
+          if (near || usedUp) ...[
+            const SizedBox(height: 10),
             Text(
-              '${loc['home.traffic']}: ${loc.format('home.trafficOf', {
-                'used': loc.bytes(quota.usedBytes),
-                'limit': loc.bytes(quota.limitBytes),
-              })}',
-              style: ColituText.small,
+              freeQuotaNoticeOf(user),
+              key: const ValueKey('freeQuotaNotice'),
+              style: ColituText.small.copyWith(
+                color: usedUp ? ColituColors.danger : ColituColors.warning,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(loc['plan.premiumPitch'], style: ColituText.small),
+            const SizedBox(height: 10),
+            ColituButton(
+              key: const ValueKey('freeQuotaUpgrade'),
+              label: loc['plan.upgrade'],
+              onPressed: onOpenPlan,
+              height: 40,
             ),
           ],
         ],
@@ -645,6 +685,56 @@ String planNameOf(ColituUser? user) {
 
 /// The free plan (1 GB a month); its entitlement renews every month.
 bool isFreePlan(ColituUser? user) => (user?.plan ?? '').trim().toLowerCase() == 'free';
+
+/// How close the free plan is to its monthly allowance.
+enum FreeQuotaState { normal, near, usedUp }
+
+/// `near` from 80 % of the allowance; `usedUp` when nothing is left or the
+/// panel reports the allowance as exhausted.
+FreeQuotaState freeQuotaStateOf(ColituUser? user) {
+  if (planStatusOf(user) == 'quota') return FreeQuotaState.usedUp;
+  final quota = user?.freeQuota;
+  if (quota == null || quota.limitBytes <= 0) return FreeQuotaState.normal;
+  if (quota.remainingBytes <= 0 || quota.usedBytes >= quota.limitBytes) {
+    return FreeQuotaState.usedUp;
+  }
+  return quota.usedRatio >= 0.8 ? FreeQuotaState.near : FreeQuotaState.normal;
+}
+
+/// Free-plan line under the plan name: "800 MB of 1 GB left · 1 device".
+String freePlanDetailOf(ColituUser? user) {
+  final loc = ColituLoc.I;
+  final quota = user?.freeQuota;
+  final devices = loc.count('device', user?.deviceLimit ?? 1);
+  // Without numbers, or once used up (the notice below says when it renews).
+  if (quota == null ||
+      quota.limitBytes <= 0 ||
+      freeQuotaStateOf(user) == FreeQuotaState.usedUp) {
+    return '${loc['plan.freeHint']} · $devices';
+  }
+  final allowance = loc.format('plan.freeLeft', {
+    'left': loc.bytes(quota.remainingBytes),
+    'limit': loc.bytes(quota.limitBytes),
+  });
+  return '$allowance · $devices';
+}
+
+/// The warning under the free-plan bar: what is left, or when the next
+/// allowance arrives once it is used up.
+String freeQuotaNoticeOf(ColituUser? user) {
+  final loc = ColituLoc.I;
+  final quota = user?.freeQuota;
+  final limit = loc.bytes(
+    quota != null && quota.limitBytes > 0 ? quota.limitBytes : 1073741824,
+  );
+  if (freeQuotaStateOf(user) == FreeQuotaState.usedUp) {
+    final reset = quota?.resetAt;
+    return reset == null
+        ? loc.format('plan.freeUsedUpLater', {'limit': limit})
+        : loc.format('plan.freeUsedUp', {'limit': limit, 'date': loc.date(reset)});
+  }
+  return loc.format('plan.freeNear', {'left': loc.bytes(quota?.remainingBytes ?? 0)});
+}
 
 /// Short form for one-line rows: "211 days left" or "No expiry".
 String planLeftOf(DateTime expires) {

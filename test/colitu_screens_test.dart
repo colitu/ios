@@ -354,6 +354,42 @@ void main() {
     c.dispose();
   });
 
+  testWidgets('home: free plan nearly used', skip: !comparePlatform, (tester) async {
+    AppSession.instance.currentUser = _freeUser(usedMb: 870);
+    final c = _controller();
+    await shoot(
+      tester,
+      _shell(
+        HomeTab(
+          controller: c,
+          onToggle: () async {},
+          onChangeLocation: () {},
+          onOpenPlan: () {},
+        ),
+      ),
+      'home_free_near',
+    );
+    c.dispose();
+  });
+
+  testWidgets('home: free plan used up', skip: !comparePlatform, (tester) async {
+    AppSession.instance.currentUser = _freeUser(usedMb: 1024, status: 'quota_exceeded');
+    final c = _controller();
+    await shoot(
+      tester,
+      _shell(
+        HomeTab(
+          controller: c,
+          onToggle: () async {},
+          onChangeLocation: () {},
+          onOpenPlan: () {},
+        ),
+      ),
+      'home_free_used_up',
+    );
+    c.dispose();
+  });
+
   testWidgets('split tunneling', skip: !comparePlatform, (tester) async {
     final c = _controller()
       ..splitTunnel = const SplitTunnelSettings(
@@ -477,6 +513,20 @@ final _user = ColituUser(
   // A minute short of 212 days: "211 days left", as the goldens show.
   expiresAt: _now.add(const Duration(days: 212, minutes: -1)),
   premiumAllowed: true,
+);
+
+/// A free-plan user (1 GB a month, 1 device) with [usedMb] used.
+ColituUser _freeUser({required int usedMb, String status = 'ACTIVE'}) => ColituUser(
+  id: 'u2',
+  email: 'ayse@example.com',
+  subscriptionStatus: status,
+  plan: 'free',
+  freeQuota: ColituFreeQuota(
+    limitBytes: 1073741824,
+    usedBytes: usedMb * 1048576,
+    remainingBytes: (1024 - usedMb).clamp(0, 1024) * 1048576,
+    resetAt: DateTime(2026, 11, 1),
+  ),
 );
 
 final _servers = [
