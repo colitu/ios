@@ -13,12 +13,14 @@ import UIKit
     private var lastNetworkInterfaceType: String?
     private var lastNetworkTransitionSentAt: Date?
     private let networkPathQueue = DispatchQueue(label: "com.colitu.vpn.network-path")
+    private var privacyCover: UIView?
 
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        installPrivacyCover()
         registerBackgroundVpnRefresh()
         scheduleBackgroundVpnRefresh()
         
@@ -28,6 +30,40 @@ import UIKit
     override func applicationDidEnterBackground(_ application: UIApplication) {
         super.applicationDidEnterBackground(application)
         scheduleBackgroundVpnRefresh()
+    }
+
+    /// Blurs the app while it is inactive, so the app switcher snapshot never
+    /// shows e-mail addresses, sign-in codes or account details. The
+    /// notifications fire with and without scenes.
+    private func installPrivacyCover() {
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.showPrivacyCover()
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.hidePrivacyCover()
+        }
+    }
+
+    private func showPrivacyCover() {
+        guard privacyCover == nil, let target = activeWindow() else { return }
+        let cover = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        cover.frame = target.bounds
+        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        target.addSubview(cover)
+        privacyCover = cover
+    }
+
+    private func hidePrivacyCover() {
+        privacyCover?.removeFromSuperview()
+        privacyCover = nil
+    }
+
+    private func activeWindow() -> UIWindow? {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        return windows.first { $0.isKeyWindow } ?? windows.first ?? window
     }
     
     func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {

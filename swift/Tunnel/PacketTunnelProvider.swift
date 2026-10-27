@@ -209,7 +209,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         if let xrayJson = providerConfig["xrayJson"] as? Data {
             let xrayURL = runDir.adaptedAppendPath(path: "xray.json")
             do {
-                try xrayJson.write(to: xrayURL)
+                try xrayJson.write(to: xrayURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             } catch {
                 YGLog("startTunnel write xray.json error: \(error)")
             }
@@ -514,7 +514,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         ])
         stopStabilityLayer()
         self.stopXray()
+        if userInitiatedStop {
+            removeCoreConfigs()
+        }
         setStabilityState(.disconnected, reason: userInitiatedStop ? "manual_disconnect" : "stopTunnel")
+    }
+
+    /// A manual disconnect leaves no node credentials on disk (MASVS-STORAGE-1).
+    /// Automatic stops keep them: on-demand reconnects start from them.
+    private func removeCoreConfigs() {
+        guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return }
+        for name in ["xray.json", "xray-tun2socks.json"] {
+            try? FileManager.default.removeItem(at: runDir.adaptedAppendPath(path: name))
+        }
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {
@@ -597,7 +609,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         guard let runDir = extensionGroupContainerURL()?.adaptedAppendPath(path: "run") else { return false }
         try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
         do {
-            try content.write(to: runDir.adaptedAppendPath(path: "xray.json"), options: .atomic)
+            try content.write(to: runDir.adaptedAppendPath(path: "xray.json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             return true
         } catch {
             YGLog("writeCoreConfig error: \(error)")
@@ -877,6 +889,44 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         }
     }
 
+    /// Every DNS query from iOS comes from a fresh source port, so each one
+    /// is its own UDP session in hev and its own SOCKS UDP association in
+    /// the core, routed to the dns outbound (port 53 rule). The outbound
+    /// answers A/AAAA itself and never opens its upstream connection, so a
+    /// session ended only when hev's 30 s UDP timeout closed the
+    /// association: six goroutines and three 8 KB buffers per lookup (a
+    /// 10-26 Hysteria2 report: 185 at once, 1,100 of 1,391 goroutines).
+    /// At its own level the dns outbound ends its part (four of the six
+    /// goroutines) once the session is idle for `dnsSessionIdle` seconds.
+    /// TCP and other UDP sessions stay at level 0.
+    static let dnsSessionLevel = 53
+
+    /// Longer than the slowest lookup the core's DNS client makes: it asks
+    /// the servers in turn, each for `timeoutMs` (4 s when unset), and an
+    /// answer that comes after the session ended is dropped. Never above
+    /// level 0's idle timeout.
+    static func dnsSessionIdle(_ dns: [String: Any]?) -> Int {
+        let servers = dns?["servers"] as? [Any] ?? []
+        let lookupMs = servers.reduce(0) { total, server in
+            let timeout = ((server as? [String: Any])?["timeoutMs"] as? NSNumber)?.intValue ?? 0
+            return total + (timeout > 0 ? timeout : 4000)
+        }
+        let seconds = (max(lookupMs, 4000) + 999) / 1000 + 1
+        return min(seconds, baseCorePolicy["connIdle"] ?? 180)
+    }
+
+    /// Puts a dns outbound that names no level of its own at
+    /// `dnsSessionLevel`.
+    static func withDnsSessionLevel(_ outbound: [String: Any]) -> [String: Any] {
+        guard (outbound["protocol"] as? String) == "dns" else { return outbound }
+        var settings = outbound["settings"] as? [String: Any] ?? [:]
+        guard settings["userLevel"] == nil else { return outbound }
+        settings["userLevel"] = dnsSessionLevel
+        var result = outbound
+        result["settings"] = settings
+        return result
+    }
+
     /// The hev session cap for the next core: lower over XHTTP (see
     /// `corePolicyFor(xhttp:)`), never above the cap memory restarts left.
     static let sessionCapXhttp = 192
@@ -938,6 +988,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             level0[key] = value
         }
         levels["0"] = level0
+        // DNS sessions get a level of their own (see `dnsSessionIdle`).
+        var dnsLevel = levels[String(Self.dnsSessionLevel)] as? [String: Any] ?? [:]
+        if dnsLevel["connIdle"] == nil {
+            dnsLevel["connIdle"] = Self.dnsSessionIdle(config["dns"] as? [String: Any])
+        }
+        levels[String(Self.dnsSessionLevel)] = dnsLevel
         policy["levels"] = levels
         config["policy"] = policy
         // Dial failures, timeouts and TLS errors show up at "warning"; the
@@ -949,7 +1005,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         ] as [String: Any]
         if let outbounds = config["outbounds"] as? [[String: Any]] {
             config["outbounds"] = outbounds.map { outbound in
-                let capped = capQuicReceiveWindows(outbound)
+                let capped = capQuicReceiveWindows(withDnsSessionLevel(outbound))
                 guard let pinnedServer else { return capped }
                 return pinServerAddress(capped, to: pinnedServer)
             }
@@ -995,7 +1051,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
         }
         let socksConfigURL = configURL.deletingLastPathComponent()
             .adaptedAppendPath(path: "xray-tun2socks.json")
-        try JSONSerialization.data(withJSONObject: config).write(to: socksConfigURL, options: .atomic)
+        try JSONSerialization.data(withJSONObject: config).write(to: socksConfigURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         request["configPath"] = socksConfigURL.adaptedPath()
         return try JSONSerialization.data(withJSONObject: request).base64EncodedString()
     }

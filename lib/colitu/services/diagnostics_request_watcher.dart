@@ -4,7 +4,8 @@ import 'package:flutter/widgets.dart';
 import 'package:colitu_vpn/colitu/services/support_service.dart';
 
 /// Asks the panel, when signed in, whether a support agent wants this
-/// device's connection report, and sends it silently (no dialog).
+/// device's connection report, and sends it silently (no dialog). After a
+/// send, [onSent] runs once so the app can show one short notice.
 ///
 /// Checked on start and whenever the app returns to the foreground, at most
 /// once per [minInterval]. A request answered in this run (also one the
@@ -14,6 +15,7 @@ class DiagnosticsRequestWatcher with WidgetsBindingObserver {
   DiagnosticsRequestWatcher({
     required this.api,
     required this.buildReport,
+    this.onSent,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -22,6 +24,9 @@ class DiagnosticsRequestWatcher with WidgetsBindingObserver {
 
   final ColituSupportService api;
   final Future<String> Function() buildReport;
+
+  /// Called once after the report was sent (not for a failure).
+  final void Function()? onSent;
   final DateTime Function() _clock;
 
   DateTime? _lastCheck;
@@ -61,6 +66,11 @@ class DiagnosticsRequestWatcher with WidgetsBindingObserver {
         await api.answerDiagnosticsRequest(request.id, await buildReport());
         _answered.add(request.id);
         _retryAfter = null;
+        if (!_disposed) {
+          try {
+            onSent?.call();
+          } catch (_) {}
+        }
       } catch (_) {
         _retryAfter = _clock().add(retryAfter);
       }

@@ -917,9 +917,9 @@ class ColituLoc extends ChangeNotifier {
     ],
     'auth.registerTitle': ['Создать аккаунт', 'Hesap oluştur', 'Create account'],
     'auth.registerSub': [
-      'Зарегистрируйтесь по почте и пользуйтесь Colitu бесплатно: 10 ГБ каждый месяц.',
-      'E-postanızla kaydolun, Colitu’yu ücretsiz kullanın: her ay 10 GB.',
-      'Sign up with your email and use Colitu for free: 10 GB every month.',
+      'Зарегистрируйтесь по почте и пользуйтесь Colitu бесплатно: 1 ГБ каждый месяц.',
+      'E-postanızla kaydolun, Colitu’yu ücretsiz kullanın: her ay 1 GB.',
+      'Sign up with your email and use Colitu for free: 1 GB every month.',
     ],
     'auth.email': ['Электронная почта', 'E-posta', 'Email'],
     'auth.emailHint': ['you@example.com', 'ornek@eposta.com', 'you@example.com'],
@@ -994,7 +994,7 @@ class ColituLoc extends ChangeNotifier {
     'mfa.err.unavailable': ['Проверка кода сейчас недоступна. Попробуйте чуть позже.', 'Kod doğrulaması şu anda kullanılamıyor. Biraz sonra tekrar deneyin.', 'Code check is unavailable right now. Try again shortly.'],
     'plan.freeName': ['Бесплатный тариф', 'Ücretsiz plan', 'Free plan'],
     'plan.status.quota': ['ЛИМИТ ИСЧЕРПАН', 'KOTA DOLDU', 'LIMIT REACHED'],
-    'plan.freeHint': ['10 ГБ каждый месяц', 'Her ay 10 GB', '10 GB every month'],
+    'plan.freeHint': ['1 ГБ каждый месяц', 'Her ay 1 GB', '1 GB every month'],
     'plan.upgrade': ['Перейти на безлимит', 'Sınırsız trafiğe geç', 'Go unlimited'],
     'reset.done': ['Пароль изменён. Вы вошли в аккаунт.', 'Şifreniz değiştirildi, giriş yaptınız.', 'Your password was changed and you’re signed in.'],
     'auth.expired': [
@@ -1403,6 +1403,11 @@ class ColituLoc extends ChangeNotifier {
       'Новый ответ поддержки',
       'Destekten yeni yanıt',
       'New reply from support',
+    ],
+    'support.reportSent': [
+      'Служба поддержки получила отчёт о соединении. Отчёт обезличен: в нём нет названий сайтов и IP-адресов.',
+      'Destek ekibi bağlantı raporunu aldı. Rapor maskelenmiştir; site adları ve IP adresleri içermez.',
+      'Support received your connection report. It is masked and contains no site names or IP addresses.',
     ],
     'support.sent': [
       'Обращение отправлено. Мы ответим здесь и по почте.',
