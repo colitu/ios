@@ -25,7 +25,9 @@ abstract final class ColituColors {
 
   static const text = Color(0xFFF4F3FA);
   static const muted = Color(0xFF9A9AAB);
-  static const dim = Color(0xFF63636F);
+  /// Quietest text tone (hints, placeholders, time stamps): 5.3:1 on the
+  /// card surface, above the 4.5:1 minimum for body text.
+  static const dim = Color(0xFF8A8A9A);
   static const line = Color(0x14FFFFFF);
   static const lineStrong = Color(0x26FFFFFF);
   static const field = Color(0xFF15151C);
@@ -1265,15 +1267,20 @@ class ColituField extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 4, bottom: 6),
-          child: Text(
-            label,
-            style: ColituText.small.copyWith(
-              color: ColituColors.muted,
-              fontWeight: FontWeight.w600,
+          // The field below carries the label for screen readers.
+          child: ExcludeSemantics(
+            child: Text(
+              label,
+              style: ColituText.small.copyWith(
+                color: ColituColors.muted,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ),
-        TextField(
+        Semantics(
+          label: label,
+          child: TextField(
           controller: controller,
           obscureText: obscureText,
           keyboardType: keyboardType,
@@ -1314,6 +1321,7 @@ class ColituField extends StatelessWidget {
               hasError ? ColituColors.danger : ColituColors.violet,
             ),
           ),
+        ),
         ),
         if (hasError)
           Padding(
@@ -1506,7 +1514,8 @@ class ColituNavItem {
   final int badge;
 }
 
-/// Floating pill with one round button per tab; the active one is lavender.
+/// Floating pill with one round button per tab; the active one is a
+/// lavender pill that also shows the tab's name.
 class ColituNavBar extends StatelessWidget {
   const ColituNavBar({
     super.key,
@@ -1519,98 +1528,151 @@ class ColituNavBar extends StatelessWidget {
   final int index;
   final ValueChanged<int> onChanged;
 
+  static const _size = 54.0;
+  static const _idleWidth = 50.0;
+
+  Widget _badge(int count) => Positioned(
+    top: 4,
+    right: 4,
+    child: Container(
+      width: 18,
+      height: 18,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: ColituColors.danger,
+        shape: BoxShape.circle,
+        border: Border.all(color: const Color(0xFF0E0E14), width: 2),
+      ),
+      child: Text(
+        count > 9 ? '9+' : '$count',
+        style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.w700, color: Colors.white, height: 1),
+      ),
+    ),
+  );
+
+  Widget _button(int i) {
+    final item = items[i];
+    final active = i == index;
+    final Widget body;
+    if (active) {
+      body = AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        height: _size,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          gradient: ColituGradients.accent,
+          borderRadius: BorderRadius.circular(ColituRadius.pill),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x669F8CFF),
+              blurRadius: 18,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(item.icon, size: 22, color: ColituColors.onAccent),
+                const SizedBox(width: 8),
+                // The visible name of the open tab; the button's semantics
+                // label already says it.
+                Flexible(
+                  child: ExcludeSemantics(
+                    child: Text(
+                      item.label,
+                      key: ValueKey('navLabel.$i'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textScaler: TextScaler.noScaling,
+                      style: const TextStyle(
+                        fontFamily: ColituText.family,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: ColituColors.onAccent,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (item.badge > 0) _badge(item.badge),
+          ],
+        ),
+      );
+    } else {
+      body = AnimatedContainer(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        width: _idleWidth,
+        height: _size,
+        decoration: const BoxDecoration(
+          color: ColituColors.surface2,
+          shape: BoxShape.circle,
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            Icon(item.icon, size: 22, color: ColituColors.muted),
+            if (item.badge > 0) _badge(item.badge),
+          ],
+        ),
+      );
+    }
+    final button = Semantics(
+      button: true,
+      selected: active,
+      label: item.label,
+      child: ColituPressable(
+        onTap: () => onChanged(i),
+        scale: 0.9,
+        child: body,
+      ),
+    );
+    return active ? Flexible(child: button) : button;
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
     return Padding(
-      padding: EdgeInsets.fromLTRB(0, 0, 0, math.max(bottom, 14)),
+      padding: EdgeInsets.fromLTRB(12, 0, 12, math.max(bottom, 14)),
       // A Row (not Center) so the bar keeps its own height inside the
-      // Scaffold's loose bottom slot.
+      // Scaffold's loose bottom slot; Flexible bounds its width.
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: const Color(0xF2141419),
-              borderRadius: BorderRadius.circular(ColituRadius.pill),
-              border: Border.all(color: ColituColors.lineStrong),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0xB3000000),
-                  blurRadius: 30,
-                  offset: Offset(0, 12),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (var i = 0; i < items.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 6),
-                  Semantics(
-                    button: true,
-                    selected: i == index,
-                    label: items[i].label,
-                    child: ColituPressable(
-                      onTap: () => onChanged(i),
-                      scale: 0.9,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 240),
-                        curve: Curves.easeOutCubic,
-                        width: 54,
-                        height: 54,
-                        decoration: BoxDecoration(
-                          gradient: i == index ? ColituGradients.accent : null,
-                          color: i == index ? null : ColituColors.surface2,
-                          shape: BoxShape.circle,
-                          boxShadow: i == index
-                              ? const [
-                                  BoxShadow(
-                                    color: Color(0x669F8CFF),
-                                    blurRadius: 18,
-                                    offset: Offset(0, 6),
-                                  ),
-                                ]
-                              : null,
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          clipBehavior: Clip.none,
-                          children: [
-                            Icon(
-                              items[i].icon,
-                              size: 22,
-                              color: i == index
-                                  ? ColituColors.onAccent
-                                  : ColituColors.muted,
-                            ),
-                            if (items[i].badge > 0)
-                              Positioned(
-                                top: 4,
-                                right: 4,
-                                child: Container(
-                                  width: 18,
-                                  height: 18,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: ColituColors.danger,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: const Color(0xFF0E0E14), width: 2),
-                                  ),
-                                  child: Text(
-                                    items[i].badge > 9 ? '9+' : '${items[i].badge}',
-                                    style: const TextStyle(fontSize: 8.5, fontWeight: FontWeight.w700, color: Colors.white, height: 1),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xF2141419),
+                borderRadius: BorderRadius.circular(ColituRadius.pill),
+                border: Border.all(color: ColituColors.lineStrong),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0xB3000000),
+                    blurRadius: 30,
+                    offset: Offset(0, 12),
                   ),
                 ],
-              ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < items.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 6),
+                    _button(i),
+                  ],
+                ],
+              ),
             ),
           ),
         ],

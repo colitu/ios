@@ -724,6 +724,7 @@ class ColituConnectionController extends ChangeNotifier
     network: networkKey,
     clientCountry: _clientCountry,
     now: DateTime.now(),
+    hintedServers: _hints.blockedServersFor(_clientNetwork),
   );
 
   VPNServer? _bestServer() => rankedServers.firstOrNull;
@@ -829,7 +830,11 @@ class ColituConnectionController extends ChangeNotifier
     error = null;
     await PreferencesKey().saveColituSelectedServerId(server.selectionKey);
     _notify();
-    if (connected || status == ColituVpnStatus.connecting) {
+    // Tapping the server the tunnel already uses (a shortcut chip, the
+    // server card) only pins it; it must not rebuild the tunnel.
+    final current = connectedServer ?? previous;
+    if ((connected || status == ColituVpnStatus.connecting) &&
+        current?.selectionKey != server.selectionKey) {
       await _switchTo(server, previous: previous);
     }
   }
@@ -2701,7 +2706,7 @@ class ColituConnectionController extends ChangeNotifier
       memory: _memory,
       network: networkKey,
       now: DateTime.now(),
-      avoid: avoidServers,
+      avoid: {...avoidServers, ..._hints.blockedServersFor(_clientNetwork)},
     );
     if (spare == null) return null;
     final cached = _spareConfigCache[spare.selectionKey];
@@ -3268,6 +3273,15 @@ class ColituConnectionController extends ChangeNotifier
         now: DateTime.now(),
       ) ??
       server.ping;
+
+  /// The last direct probe of [server] on this network got no answer and is
+  /// still fresh: the list says "Unreachable" instead of a dash. Read only.
+  bool pingFailed(VPNServer server) {
+    final ping = _pings[server.selectionKey];
+    return ping != null &&
+        ping.failed &&
+        ping.isFresh(networkKey, DateTime.now());
+  }
 
   /// No ping is measured now (the tunnel is starting or stopping, or it is
   /// up and its extension does not measure): the list shows the last direct

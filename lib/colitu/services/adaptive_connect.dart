@@ -400,6 +400,7 @@ class ColituNetworkHints {
     this.blocked = const {},
     this.scope = '',
     this.preferred = const [],
+    this.blockedServers = const {},
   });
 
   static const none = ColituNetworkHints(clientNetwork: '');
@@ -414,6 +415,17 @@ class ColituNetworkHints {
 
   /// "network" or "country".
   final String scope;
+
+  /// Servers most users in this country could not reach in the last hours
+  /// (an address block): automatic mode treats them as penalized here.
+  final Set<String> blockedServers;
+
+  /// [blockedServers] for the current network: empty unless the hints were
+  /// fetched on it (same binding as [blocked] and the token).
+  Set<String> blockedServersFor(String currentClientNetwork) =>
+      clientNetwork.isNotEmpty && clientNetwork == currentClientNetwork
+      ? blockedServers
+      : const {};
 
   /// The token for observations made while on [currentClientNetwork].
   String? tokenFor(String currentClientNetwork) =>
@@ -486,6 +498,9 @@ class ColituNetworkHints {
       scope: hints is Map && hints['scope'] is String
           ? hints['scope'] as String
           : '',
+      blockedServers: hints is Map
+          ? parseProtocols(hints['blocked_servers']).toSet()
+          : const {},
     );
   }
 
@@ -495,6 +510,7 @@ class ColituNetworkHints {
     'blocked': blocked.toList(),
     'preferred': preferred,
     'scope': scope,
+    'blocked_servers': blockedServers.toList(),
   };
 
   static ColituNetworkHints decode(String? raw) {
@@ -517,6 +533,8 @@ class ColituNetworkHints {
             if (!blocked.contains(protocol)) protocol,
         ],
         scope: json['scope'] is String ? json['scope'] as String : '',
+        // Records stored before server hints have none.
+        blockedServers: parseProtocols(json['blocked_servers']).toSet(),
       );
     } catch (_) {
       return none;
@@ -623,6 +641,10 @@ const kMemoryBeatenMs = 60;
 ///    first
 /// 6. no usable ping: panel order, after the pinged ones
 ///
+/// [hintedServers] (the panel's blocked_servers: an address block in the
+/// client's country) count as penalized here with the oldest penalty, except
+/// the last-good server: the device's own success beats the hint.
+///
 /// The "Recommended" entry and the "Fastest server" connect target are both
 /// the first element, so the screen never disagrees with what connect does.
 List<VPNServer> rankServers(
@@ -632,6 +654,7 @@ List<VPNServer> rankServers(
   required String network,
   String? clientCountry,
   required DateTime now,
+  Set<String> hintedServers = const {},
 }) {
   final home = (clientCountry ?? '').trim().toUpperCase();
   final pushHome = kHomePushbackCountries.contains(home);
@@ -644,7 +667,10 @@ List<VPNServer> rankServers(
     final key = server.selectionKey;
     final ping = pings[key];
     final fresh = ping != null && ping.isFresh(network, now) ? ping : null;
-    final penalizedAt = memory.penalizedAt(network, key, now);
+    final penalizedAt = memory.penalizedAt(network, key, now) ??
+        (hintedServers.contains(key) && key != lastGood
+            ? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true)
+            : null);
     final int bucket;
     if (penalizedAt != null) {
       bucket = 3;

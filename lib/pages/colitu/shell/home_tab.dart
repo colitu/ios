@@ -6,6 +6,10 @@ import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/user_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
+import 'package:colitu_vpn/colitu/l10n/server_names.dart';
+import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
+import 'package:colitu_vpn/colitu/services/server_groups.dart';
+import 'package:colitu_vpn/colitu/services/server_shortcuts.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
@@ -268,8 +272,14 @@ class HomeTab extends StatelessWidget {
         ],
         const SizedBox(height: 12),
         _LocationCard(controller: c, onChange: onChangeLocation),
+        _QuickServers(controller: c),
         const SizedBox(height: 12),
         _PlanCard(controller: c, onOpenPlan: onOpenPlan),
+        const SizedBox(height: 12),
+        _QuickSettings(
+          controller: c,
+          onOpenSplitTunnel: onOpenSplitTunnel,
+        ),
         if (onOpenPassport != null && c.paused == null) ...[
           const SizedBox(height: 12),
           PassportCard(premium: c.planActive, onOpen: onOpenPassport!),
@@ -455,53 +465,345 @@ class _LocationCard extends StatelessWidget {
             'exit': server.exit?.short ?? '?',
           })
         : (server?.countryCode ?? '');
-    return ColituPanel(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-      radius: ColituRadius.md,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              if (auto)
-                const ColituRoundIcon(CupertinoIcons.bolt_fill, size: 44, accent: true)
-              else
-                ColituFlag(server?.countryCode ?? '', size: 44),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: ColituText.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+    // The whole card opens the locations; one label for screen readers.
+    return Semantics(
+      key: const ValueKey('locationCard'),
+      button: true,
+      label: loc.format('home.serverCard', {
+        'server': subtitle.isEmpty ? title : '$title, $subtitle',
+      }),
+      excludeSemantics: true,
+      onTap: onChange,
+      child: ColituPanel(
+        onTap: onChange,
+        padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+        radius: ColituRadius.md,
+        child: Row(
+          children: [
+            if (auto)
+              const ColituRoundIcon(CupertinoIcons.bolt_fill, size: 44, accent: true)
+            else
+              ColituFlag(server?.countryCode ?? '', size: 44),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Large text wraps to a second line before it is cut.
+                  Text(
+                    title,
+                    style: ColituText.label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (subtitle.isNotEmpty) ...[
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
                       style: ColituText.small,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
-                ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (c.connected) ...[
+              const Icon(
+                CupertinoIcons.checkmark_circle_fill,
+                size: 18,
+                color: ColituColors.success,
               ),
               const SizedBox(width: 8),
-              Icon(
-                c.connected ? CupertinoIcons.checkmark_circle_fill : CupertinoIcons.info_circle,
-                size: 18,
-                color: c.connected ? ColituColors.success : ColituColors.dim,
+            ],
+            const Icon(
+              CupertinoIcons.chevron_right,
+              size: 18,
+              color: ColituColors.muted,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Up to three small buttons under the location card: favourites first,
+/// then the last servers used. One tap switches to that server. Hidden while
+/// the lists are empty.
+class _QuickServers extends StatelessWidget {
+  const _QuickServers({required this.controller});
+
+  final ColituConnectionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final shortcuts = ColituServerShortcuts.instance;
+    return ListenableBuilder(
+      listenable: shortcuts,
+      builder: (context, _) {
+        final c = controller;
+        final buttons = shortcuts.homeButtons(
+          [...c.servers, ...c.multihopServers],
+          except: c.autoSelection ? null : c.selectedServer?.selectionKey,
+        );
+        if (buttons.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          key: const ValueKey('quickServers'),
+          padding: const EdgeInsets.only(top: 10),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final server in buttons)
+                _QuickServerButton(
+                  server: server,
+                  label: server.isMultihop
+                      ? ColituServerNames.route(server.name)
+                      : serverCityLabel(server),
+                  onTap: () => unawaited(c.selectServer(server)),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _QuickServerButton extends StatelessWidget {
+  const _QuickServerButton({
+    required this.server,
+    required this.label,
+    required this.onTap,
+  });
+
+  final VPNServer server;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final code = server.isMultihop
+        ? (server.exit?.country ?? '')
+        : server.countryCode;
+    return Semantics(
+      button: true,
+      label: ColituLoc.I.format('home.quickSwitch', {'server': label}),
+      excludeSemantics: true,
+      onTap: onTap,
+      child: ColituPressable(
+        key: ValueKey('quickServer.${server.selectionKey}'),
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 44, maxWidth: 220),
+          padding: const EdgeInsets.fromLTRB(8, 6, 14, 6),
+          decoration: BoxDecoration(
+            color: ColituColors.surface,
+            borderRadius: BorderRadius.circular(ColituRadius.pill),
+            border: Border.all(color: ColituColors.lineStrong),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ColituFlag(code, size: 24),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  style: ColituText.label.copyWith(fontSize: 13.5),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ColituButton(label: loc['home.changeServer'], onPressed: onChange, height: 46),
+        ),
+      ),
+    );
+  }
+}
+
+/// The connection switches of the account tab in one small card; each row
+/// calls the same controller method as its account-tab twin. Rows follow the
+/// account tab's mode: Simple mode keeps only always-on protection.
+class _QuickSettings extends StatelessWidget {
+  const _QuickSettings({required this.controller, this.onOpenSplitTunnel});
+
+  final ColituConnectionController controller;
+  final VoidCallback? onOpenSplitTunnel;
+
+  @override
+  Widget build(BuildContext context) {
+    final loc = ColituLoc.I;
+    final c = controller;
+    return ColituPanel(
+      key: const ValueKey('quickSettings'),
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+      radius: ColituRadius.md,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 4),
+            child: Text(
+              loc['home.quickSettings'],
+              style: ColituText.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          _QuickSwitch(
+            key: const ValueKey('quick.alwaysOn'),
+            icon: CupertinoIcons.shield_lefthalf_fill,
+            title: loc['settings.alwaysOn'],
+            value: c.alwaysOn,
+            onChanged: c.setAlwaysOn,
+          ),
+          if (c.advancedMode) ...[
+            if (ColituAdBlock.available)
+              _QuickSwitch(
+                key: const ValueKey('quick.adBlock'),
+                icon: CupertinoIcons.eye_slash_fill,
+                title: loc['settings.adBlock'],
+                value: c.adBlock,
+                onChanged: c.setAdBlock,
+              ),
+            _QuickSwitch(
+              key: const ValueKey('quick.killSwitch'),
+              icon: CupertinoIcons.nosign,
+              title: loc['killSwitch.title'],
+              value: c.strictKillSwitch,
+              onChanged: c.setStrictKillSwitch,
+            ),
+            if (onOpenSplitTunnel != null)
+              _QuickRow(
+                key: const ValueKey('quick.splitTunnel'),
+                icon: CupertinoIcons.arrow_branch,
+                title: loc['split.title'],
+                value: c.splitTunnel.active
+                    ? splitTunnelChipText(c.splitTunnel)
+                    : null,
+                onTap: onOpenSplitTunnel!,
+              ),
+          ],
         ],
       ),
     );
   }
+}
+
+class _QuickSwitch extends StatelessWidget {
+  const _QuickSwitch({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => MergeSemantics(
+    child: ColituPressable(
+      onTap: () => onChanged(!value),
+      scale: 0.99,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: ColituColors.lilac),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: ColituText.body.copyWith(fontSize: 14.5),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            CupertinoSwitch(
+              value: value,
+              onChanged: onChanged,
+              activeTrackColor: ColituColors.violet,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _QuickRow extends StatelessWidget {
+  const _QuickRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.value,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: value == null ? title : '$title, $value',
+    excludeSemantics: true,
+    onTap: onTap,
+    child: ColituPressable(
+      onTap: onTap,
+      scale: 0.99,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: ColituColors.lilac),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: ColituText.body.copyWith(fontSize: 14.5),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (value != null)
+                    Text(
+                      value!,
+                      style: ColituText.small,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(
+                CupertinoIcons.chevron_right,
+                size: 16,
+                color: ColituColors.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 /// One-row plan summary: name, expiry (or "no expiry") and traffic, with a
@@ -564,7 +866,7 @@ class _PlanCard extends StatelessWidget {
                           child: Text(
                             planNameOf(user),
                             style: ColituText.label,
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -582,15 +884,15 @@ class _PlanCard extends StatelessWidget {
                       Text(
                         detail,
                         style: ColituText.small,
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ],
                 ),
               ),
-              // Near or at the free limit the wide button below takes over.
-              if (!near && !usedUp) ...[
+              // The free plan has the wide "Go Premium" button below.
+              if (!free) ...[
                 const SizedBox(width: 8),
                 ColituButton.secondary(
                   label: loc['plan.manage'],
@@ -638,12 +940,16 @@ class _PlanCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(loc['plan.premiumPitch'], style: ColituText.small),
+          ],
+          // Free plan: straight to the plan tab in the app (no prices or
+          // purchase links here).
+          if (free) ...[
             const SizedBox(height: 10),
             ColituButton(
               key: const ValueKey('freeQuotaUpgrade'),
-              label: loc['plan.upgrade'],
+              label: loc['plan.goPremium'],
               onPressed: onOpenPlan,
-              height: 40,
+              height: 44,
             ),
           ],
         ],
@@ -735,6 +1041,12 @@ String freeQuotaNoticeOf(ColituUser? user) {
   }
   return loc.format('plan.freeNear', {'left': loc.bytes(quota?.remainingBytes ?? 0)});
 }
+
+/// The expiry date, or "No expiry" when it is more than ten years away.
+String planDateOf(DateTime expires) =>
+    expires.difference(ColituClock.now()).inDays > 3650
+    ? ColituLoc.I['plan.lifetime']
+    : ColituLoc.I.date(expires);
 
 /// Short form for one-line rows: "211 days left" or "No expiry".
 String planLeftOf(DateTime expires) {

@@ -9,6 +9,7 @@ import 'package:colitu_vpn/colitu/l10n/colitu_loc.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/services/server_groups.dart';
+import 'package:colitu_vpn/colitu/services/server_shortcuts.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
 import 'package:colitu_vpn/pages/colitu/shell/page.dart';
 
@@ -54,6 +55,8 @@ class _LocationsTabState extends State<LocationsTab> {
   void initState() {
     super.initState();
     _search.addListener(() => setState(() {}));
+    _shortcuts.addListener(_onShortcuts);
+    unawaited(_shortcuts.load());
     _pingsWerePaused = widget.controller.pingsPaused;
     widget.controller.addListener(_onController);
     unawaited(widget.controller.measurePings());
@@ -83,9 +86,16 @@ class _LocationsTabState extends State<LocationsTab> {
     _pingsWerePaused = paused;
   }
 
+  final _shortcuts = ColituServerShortcuts.instance;
+
+  void _onShortcuts() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _pingResume?.cancel();
+    _shortcuts.removeListener(_onShortcuts);
     widget.controller.removeListener(_onController);
     _search.dispose();
     super.dispose();
@@ -192,6 +202,27 @@ class _LocationsTabState extends State<LocationsTab> {
     final routes = _routes();
     final searching = _search.text.trim().isNotEmpty;
     final selectedKey = c.autoSelection ? null : c.selectedServer?.selectionKey;
+    // Favourites and recent servers (device only); a server that left the
+    // list is not shown. A search shows only the matches.
+    final known = [...c.servers, ...c.multihopServers];
+    final favorites = searching
+        ? const <VPNServer>[]
+        : _shortcuts.favorites(known);
+    final recents = searching
+        ? const <VPNServer>[]
+        : _shortcuts
+              .recents(known)
+              .where(
+                (s) => !favorites.any((f) => f.selectionKey == s.selectionKey),
+              )
+              .toList();
+    Widget shortcutCard(VPNServer server) => Padding(
+      key: ValueKey('shortcut.${server.selectionKey}'),
+      padding: const EdgeInsets.only(bottom: _cardGap),
+      child: server.isMultihop
+          ? _RouteCard(controller: c, route: server)
+          : _ServerCard(controller: c, server: server),
+    );
     // A search lists the matches flat; otherwise a country with several
     // servers becomes one expandable group.
     final groups = groupServersByCountry(rest, flat: searching);
@@ -257,50 +288,67 @@ class _LocationsTabState extends State<LocationsTab> {
         const SizedBox(height: 6),
         Text(loc['locations.tagline'], style: ColituText.muted),
         const SizedBox(height: 20),
-        TextField(
-          controller: _search,
-          style: ColituText.body.copyWith(fontSize: 16, height: 1.25),
-          cursorColor: ColituColors.lilac,
-          decoration: InputDecoration(
-            constraints: const BoxConstraints(minHeight: _fieldHeight),
-            hintText: '${loc['locations.search']}…',
-            // Muted rather than dim: the hint keeps a 4.5:1 contrast.
-            hintStyle: ColituText.body.copyWith(
-              color: ColituColors.muted,
-              fontSize: 16,
-              height: 1.25,
-            ),
-            prefixIcon: const Padding(
-              padding: EdgeInsets.only(left: 18, right: 10),
-              child: Icon(
-                CupertinoIcons.search,
-                size: 20,
+        Semantics(
+          label: loc['locations.searchLabel'],
+          child: TextField(
+            key: const ValueKey('locationsSearch'),
+            controller: _search,
+            style: ColituText.body.copyWith(fontSize: 16, height: 1.25),
+            cursorColor: ColituColors.lilac,
+            decoration: InputDecoration(
+              constraints: const BoxConstraints(minHeight: _fieldHeight),
+              hintText: '${loc['locations.search']}…',
+              // Muted rather than dim: the hint keeps a 4.5:1 contrast.
+              hintStyle: ColituText.body.copyWith(
                 color: ColituColors.muted,
+                fontSize: 16,
+                height: 1.25,
               ),
-            ),
-            prefixIconConstraints: const BoxConstraints(minWidth: 48),
-            suffixIcon: _search.text.isEmpty
-                ? null
-                : IconButton(
-                    onPressed: _search.clear,
-                    icon: const Icon(
-                      CupertinoIcons.xmark_circle_fill,
-                      size: 18,
-                      color: ColituColors.muted,
+              prefixIcon: const Padding(
+                padding: EdgeInsets.only(left: 18, right: 10),
+                child: Icon(
+                  CupertinoIcons.search,
+                  size: 20,
+                  color: ColituColors.muted,
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 48),
+              suffixIcon: _search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: loc['locations.clearSearch'],
+                      onPressed: _search.clear,
+                      icon: const Icon(
+                        CupertinoIcons.xmark_circle_fill,
+                        size: 18,
+                        color: ColituColors.muted,
+                      ),
                     ),
-                  ),
-            filled: true,
-            fillColor: ColituColors.surface,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 18,
-              vertical: 16,
+              filled: true,
+              fillColor: ColituColors.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 16,
+              ),
+              border: _border(ColituColors.line),
+              enabledBorder: _border(ColituColors.line),
+              focusedBorder: _border(_selectedBorder),
             ),
-            border: _border(ColituColors.line),
-            enabledBorder: _border(ColituColors.line),
-            focusedBorder: _border(_selectedBorder),
           ),
         ),
         const SizedBox(height: 14),
+        if (favorites.isNotEmpty) ...[
+          _SectionHeader(title: loc['locations.favorites']),
+          const SizedBox(height: 12),
+          for (final server in favorites) shortcutCard(server),
+          const SizedBox(height: 14),
+        ],
+        if (recents.isNotEmpty) ...[
+          _SectionHeader(title: loc['locations.recents']),
+          const SizedBox(height: 12),
+          for (final server in recents) shortcutCard(server),
+          const SizedBox(height: 14),
+        ],
         // Simple mode: no category filters.
         if (c.advancedMode) ...[
           SingleChildScrollView(
@@ -746,7 +794,8 @@ class _RowBody extends StatelessWidget {
                     child: Text(
                       title,
                       style: _nameStyle,
-                      maxLines: 1,
+                      // Large text wraps to a second line before it is cut.
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -988,11 +1037,62 @@ class _ServerCard extends StatelessWidget {
             connected: connected,
             badge: _badgeFor(server),
             trailing: [
-              if (selectable)
+              if (selectable && !c.pingFailed(server))
                 _Ping(c.pingOf(server))
               else
-                Text(loc['server.offline'], style: ColituText.small),
+                const _Unreachable(),
+              const SizedBox(width: 2),
+              _StarButton(server: server),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Unreachable": the server is down or did not answer the last probe.
+class _Unreachable extends StatelessWidget {
+  const _Unreachable();
+
+  @override
+  Widget build(BuildContext context) => Text(
+    ColituLoc.I['server.unreachable'],
+    key: const ValueKey('unreachable'),
+    style: ColituText.small,
+  );
+}
+
+/// Star that adds a server to the favourites (kept on this device). The
+/// tap target is 44 x 44 points.
+class _StarButton extends StatelessWidget {
+  const _StarButton({required this.server});
+
+  final VPNServer server;
+
+  @override
+  Widget build(BuildContext context) {
+    final shortcuts = ColituServerShortcuts.instance;
+    final on = shortcuts.isFavorite(server);
+    return Semantics(
+      button: true,
+      toggled: on,
+      label: ColituLoc.I[on ? 'fav.remove' : 'fav.add'],
+      excludeSemantics: true,
+      onTap: () => unawaited(shortcuts.toggleFavorite(server)),
+      child: GestureDetector(
+        key: ValueKey('star.${server.selectionKey}'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => unawaited(shortcuts.toggleFavorite(server)),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(
+            child: Icon(
+              on ? CupertinoIcons.star_fill : CupertinoIcons.star,
+              size: 20,
+              color: on ? ColituColors.warning : ColituColors.muted,
+            ),
           ),
         ),
       ),
@@ -1003,7 +1103,7 @@ class _ServerCard extends StatelessWidget {
 /// The one small badge a row may carry: PRO first, else ad-free YouTube or
 /// the ad blocker when the node has them.
 Widget? _badgeFor(VPNServer server) {
-  if (server.isPremium) return const ColituBadge('PRO');
+  if (server.isPremium) return const _PremiumBadge();
   if (server.services.contains('youtube_adfree')) {
     return const _MiniBadge(
       mark: ColituServiceMark('youtube_adfree', size: 12),
@@ -1017,9 +1117,25 @@ Widget? _badgeFor(VPNServer server) {
   return null;
 }
 
+/// Premium server: a small star (read as "Premium") so the name keeps its
+/// room.
+class _PremiumBadge extends StatelessWidget {
+  const _PremiumBadge();
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: ColituLoc.I['plan.premiumBadge'],
+    excludeSemantics: true,
+    child: const _MiniBadge(
+      key: ValueKey('premiumBadge'),
+      mark: Icon(CupertinoIcons.star_fill, size: 12, color: ColituColors.lilac),
+    ),
+  );
+}
+
 /// Icon-only round badge so the country name keeps its room.
 class _MiniBadge extends StatelessWidget {
-  const _MiniBadge({required this.mark});
+  const _MiniBadge({super.key, required this.mark});
 
   final Widget mark;
 
@@ -1148,7 +1264,7 @@ class _CountryGroupState extends State<_CountryGroup> {
                         if (anySelectable)
                           _Ping(group.bestPing(c.pingOf))
                         else
-                          Text(loc['server.offline'], style: ColituText.small),
+                          const _Unreachable(),
                         const SizedBox(width: 12),
                         AnimatedRotation(
                           turns: expanded ? 0.5 : 0,
@@ -1308,7 +1424,7 @@ class _CityRow extends StatelessWidget {
                           child: Text(
                             serverCityLabel(server),
                             style: _nameStyle.copyWith(fontSize: 15.5),
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1320,7 +1436,7 @@ class _CityRow extends StatelessWidget {
                           ),
                         ] else if (server.isPremium) ...[
                           const SizedBox(width: 8),
-                          const ColituBadge('PRO'),
+                          const _PremiumBadge(),
                         ],
                       ],
                     ),
@@ -1332,10 +1448,10 @@ class _CityRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              if (selectable)
+              if (selectable && !c.pingFailed(server))
                 _Ping(c.pingOf(server))
               else
-                Text(loc['server.offline'], style: ColituText.small),
+                const _Unreachable(),
               const SizedBox(width: 8),
               SizedBox(
                 width: 18,
@@ -1352,6 +1468,7 @@ class _CityRow extends StatelessWidget {
                       : const SizedBox.shrink(),
                 ),
               ),
+              _StarButton(server: server),
             ],
           ),
         ),
@@ -1402,9 +1519,15 @@ class _RouteCard extends StatelessWidget {
               ],
             ),
             title: ColituServerNames.route(route.name),
-            subtitle: selectable ? loc['multihop.ping'] : loc['server.offline'],
+            subtitle: selectable
+                ? loc['multihop.ping']
+                : loc['server.unreachable'],
             connected: connected,
-            trailing: [if (selectable) _Ping(c.pingOf(route))],
+            trailing: [
+              if (selectable) _Ping(c.pingOf(route)),
+              const SizedBox(width: 2),
+              _StarButton(server: route),
+            ],
           ),
         ),
       ),

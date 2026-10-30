@@ -11,6 +11,7 @@ import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_survey.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/services/diagnostics_request_watcher.dart';
+import 'package:colitu_vpn/colitu/services/server_shortcuts.dart';
 import 'package:colitu_vpn/colitu/services/site_redaction.dart';
 import 'package:colitu_vpn/colitu/services/support_service.dart';
 import 'package:colitu_vpn/colitu/theme/colitu_theme.dart';
@@ -66,6 +67,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
     super.initState();
     _controller.onSessionEnded = _onSessionEnded;
     _controller.addListener(_onControllerChanged);
+    unawaited(ColituServerShortcuts.instance.load());
     unawaited(_controller.init().then((_) {
       if (mounted && !_sessionEnded) _reportWatcher.start();
     }));
@@ -88,6 +90,14 @@ class _ColituShellPageState extends State<ColituShellPage> {
   void _onControllerChanged() {
     if (_controller.connected) {
       unawaited(ColituInviteCardPrefs.instance.markConnected());
+      // Recent servers: the one the tunnel is up on (kept on the device).
+      // Only servers the user picked; an automatic or recovery pick tapped
+      // later would switch to manual mode, where Adaptive Connect no longer
+      // moves away from a failing server.
+      final server = _controller.connectedServer;
+      if (server != null && !_controller.autoSelection) {
+        unawaited(ColituServerShortcuts.instance.recordConnected(server));
+      }
     }
     final notice = _controller.notice;
     if (notice != null && notice != _shownNotice && mounted) {
@@ -221,7 +231,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
         final items = [
           ColituNavItem(icon: CupertinoIcons.house_fill, label: loc['nav.home']),
           ColituNavItem(icon: CupertinoIcons.globe, label: loc['nav.locations']),
-          ColituNavItem(icon: CupertinoIcons.gift_fill, label: loc['nav.plan']),
+          ColituNavItem(icon: CupertinoIcons.star_fill, label: loc['nav.plan']),
           ColituNavItem(
             icon: CupertinoIcons.chat_bubble_text_fill,
             label: loc['nav.support'],

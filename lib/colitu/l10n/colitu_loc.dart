@@ -419,9 +419,9 @@ class ColituLoc extends ChangeNotifier {
       'Unlock more of the internet',
     ],
     'home.promo.sub': [
-      'Все серверы и безлимитный трафик с Colitu Pro',
-      'Colitu Pro ile tüm sunucular ve sınırsız trafik',
-      'Every server and unlimited traffic with Colitu Pro',
+      'Все серверы и безлимитный трафик с Premium',
+      'Premium ile tüm sunucular ve sınırsız trafik',
+      'Every server and unlimited traffic with Premium',
     ],
     'home.fastest': ['Самый быстрый сервер', 'En hızlı sunucu', 'Fastest server'],
     'home.autoPicked': ['Выбран автоматически', 'Otomatik seçildi', 'Auto-selected'],
@@ -434,7 +434,7 @@ class ColituLoc extends ChangeNotifier {
     'transport.trojan': ['Классический', 'Klasik', 'Classic'],
     'transport.shadowsocks': ['Лёгкий', 'Hafif', 'Light'],
     'transport.other': ['Резервный', 'Yedek', 'Backup'],
-    'home.getPro': ['Получить Pro', 'Pro’ya geç', 'Get Pro'],
+    'home.getPro': ['Перейти на Premium', 'Premium’a geç', 'Go Premium'],
 
     // Locations
     'locations.all': ['Все', 'Tümü', 'All'],
@@ -442,15 +442,15 @@ class ColituLoc extends ChangeNotifier {
     'locations.ai': ['Нейросети', 'Yapay zeka', 'AI'],
     'locations.streaming': ['Кино и сериалы', 'Dizi & film', 'Movies & TV'],
     'locations.promo': ['Серверы по всему миру', 'Dünya çapında sunucular', 'Get worldwide coverage'],
-    'locations.promoSub': ['с Colitu Pro', 'Colitu Pro ile', 'with Colitu Pro'],
+    'locations.promoSub': ['с Premium', 'Premium ile', 'with Premium'],
     'locations.online': ['Онлайн: {n}', 'Çevrimiçi: {n}', '{n} online'],
 
     // Plan hero
     'plan.heroTitle': ['Усильте защиту', 'Gizliliğinizi yükseltin', 'Upgrade your privacy'],
     'plan.heroSub': [
-      'Все серверы, максимальная скорость и постоянная защита с Colitu Pro.',
-      'Colitu Pro ile tüm sunucular, en yüksek hız ve sürekli koruma.',
-      'Every server, top speed and always-on protection with Colitu Pro.',
+      'Все серверы, максимальная скорость и постоянная защита с Premium.',
+      'Premium ile tüm sunucular, en yüksek hız ve sürekli koruma.',
+      'Every server, top speed and always-on protection with Premium.',
     ],
     'plan.manageTitle': [
       'Подписка управляется на colitu.com',
@@ -472,7 +472,7 @@ class ColituLoc extends ChangeNotifier {
     'plan.manage': ['Управлять', 'Yönet', 'Manage'],
     'plan.lifetime': ['Бессрочно', 'Süresiz', 'No expiry'],
     'plan.select': ['Выберите тариф', 'Paketinizi seçin', 'Select your plan'],
-    'plan.get': ['Получить Colitu Pro', 'Colitu Pro’yu al', 'Get Colitu Pro'],
+    'plan.get': ['Получить Premium', 'Premium’u al', 'Get Premium'],
     'plan.total': ['Итого {amount}', 'Toplam {amount}', '{amount} total'],
     'plan.perMonth': ['{amount}/мес.', '{amount}/ay', '{amount}/mo'],
 
@@ -1637,9 +1637,9 @@ class ColituLoc extends ChangeNotifier {
     ],
     'multihop.section': ['Мультихоп', 'Çoklu atlama', 'Multihop'],
     'multihop.sectionHint': [
-      'Трафик идёт через два сервера: сначала входной, затем выходной. Работает только по VLESS; пинг показан до входного сервера.',
-      'Trafik iki sunucudan geçer: önce giriş, sonra çıkış. Yalnızca VLESS ile çalışır; ping yalnızca giriş sunucusu içindir.',
-      'Traffic passes two servers: the entry first, then the exit. Works over VLESS only; ping is measured to the entry server.',
+      'Трафик идёт через два сервера: сначала входной, затем выходной. Пинг показан до входного сервера.',
+      'Trafik iki sunucudan geçer: önce giriş, sonra çıkış. Ping yalnızca giriş sunucusu içindir.',
+      'Traffic passes two servers: the entry first, then the exit. Ping is measured to the entry server.',
     ],
     'multihop.ping': ['Оценка · +1 узел', 'Tahmini · +1 atlama', 'Estimated · +1 hop'],
     'multihop.sub': ['Двойной VPN · {entry} → {exit}', 'Çift VPN · {entry} → {exit}', 'Double VPN · {entry} → {exit}'],
@@ -1650,16 +1650,16 @@ class ColituLoc extends ChangeNotifier {
       'This route is no longer available. The list was refreshed; pick another one.',
     ],
     'multihop.needsVless': [
-      'Мультихоп работает только по VLESS, а этот маршрут не предлагает такой транспорт.',
-      'Çoklu atlama yalnızca VLESS ile çalışır, bu rota böyle bir aktarım sunmuyor.',
-      'Multihop works over VLESS only, and this route offers no VLESS transport.',
+      'Этот маршрут сейчас не поддерживает мультихоп. Выберите другой.',
+      'Bu rota şu an çoklu atlamayı desteklemiyor. Başka bir rota seçin.',
+      'This route does not support multihop right now. Pick another one.',
     ],
     'rotation.title': ['Меняющийся IP', 'Dönen IP', 'Rotating IP'],
     'rotation.kicker': ['МЕНЯЮЩИЙСЯ IP', 'DÖNEN IP', 'ROTATING IP'],
     'rotation.hint': [
-      'IP-адрес и страна выхода меняются по расписанию без отключения от VPN. Уже открытые соединения остаются на прежнем выходе. Работает только по VLESS.',
-      'Çıkış IP adresiniz ve ülkeniz bağlantı kesilmeden belirli aralıklarla değişir. Açık bağlantılar eski çıkışta kalır. Yalnızca VLESS ile çalışır.',
-      'Your exit IP address and country change on a schedule without disconnecting. Open connections stay on their old exit. Works over VLESS only.',
+      'IP-адрес и страна выхода меняются по расписанию без отключения от VPN. Уже открытые соединения остаются на прежнем выходе. Работает не на всех серверах.',
+      'Çıkış IP adresiniz ve ülkeniz bağlantı kesilmeden belirli aralıklarla değişir. Açık bağlantılar eski çıkışta kalır. Her sunucuda çalışmaz.',
+      'Your exit IP address and country change on a schedule without disconnecting. Open connections stay on their old exit. Not every server supports it.',
     ],
     'rotation.every': ['Менять каждые', 'Değişim aralığı', 'Change every'],
     'rotation.off': ['Выкл.', 'Kapalı', 'Off'],
@@ -1678,9 +1678,9 @@ class ColituLoc extends ChangeNotifier {
       'Could not load the settings. Pull down to try again.',
     ],
     'rotation.needsVless': [
-      'Смена IP работает только по VLESS, а этот сервер не предлагает такой транспорт.',
-      'IP değişimi yalnızca VLESS ile çalışır, bu sunucu böyle bir aktarım sunmuyor.',
-      'Rotation needs VLESS, and this server offers no VLESS transport.',
+      'Этот сервер не поддерживает смену IP. Выберите другой.',
+      'Bu sunucu IP değişimini desteklemiyor. Başka bir sunucu seçin.',
+      'This server does not support IP rotation. Pick another one.',
     ],
     'rotation.home': [
       'Выход: {exit} · смена через {time}',
@@ -2962,6 +2962,25 @@ class ColituLoc extends ChangeNotifier {
       '{country} pulu {level} oldu',
       '{country} stamp is now {level}',
     ],
+    // Favourites, recents, quick settings, accessibility (2026-10-27)
+    'locations.favorites': ['Избранное', 'Favoriler', 'Favorites'],
+    'locations.recents': ['Недавние', 'Son kullanılanlar', 'Recent'],
+    'fav.add': ['Добавить в избранное', 'Favorilere ekle', 'Add to favorites'],
+    'fav.remove': ['Убрать из избранного', 'Favorilerden çıkar', 'Remove from favorites'],
+    'home.quickSwitch': ['Переключиться на {server}', '{server} sunucusuna geç', 'Switch to {server}'],
+    'home.serverCard': [
+      'Сервер: {server}. Открыть локации',
+      'Sunucu: {server}. Konumları aç',
+      'Server: {server}. Open locations',
+    ],
+    'home.quickSettings': ['Быстрые настройки', 'Hızlı ayarlar', 'Quick settings'],
+    'plan.goPremium': ['Перейти на Premium', 'Premium’a geç', 'Go Premium'],
+    'plan.premiumBadge': ['Premium', 'Premium', 'Premium'],
+    'server.unreachable': ['Недоступен', 'Ulaşılamıyor', 'Unreachable'],
+    'locations.searchLabel': ['Поиск сервера', 'Sunucu ara', 'Search servers'],
+    'locations.clearSearch': ['Очистить поиск', 'Aramayı temizle', 'Clear search'],
+    'support.removeFile': ['Удалить файл {name}', '{name} dosyasını kaldır', 'Remove file {name}'],
+    'support.sendReply': ['Отправить', 'Gönder', 'Send'],
   };
 
   static const _countries = <String, List<String>>{

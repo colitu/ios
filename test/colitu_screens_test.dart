@@ -451,7 +451,7 @@ Widget _shell(Widget tab, {int index = 0}) {
           label: ColituLoc.I['nav.locations'],
         ),
         ColituNavItem(
-          icon: Icons.card_giftcard_rounded,
+          icon: Icons.star_rounded,
           label: ColituLoc.I['nav.plan'],
         ),
         ColituNavItem(

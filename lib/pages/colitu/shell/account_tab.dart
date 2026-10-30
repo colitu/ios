@@ -314,10 +314,10 @@ class _AccountTabState extends State<AccountTab> {
                           isFreePlan(user)
                               ? '${planNameOf(user)} · ${loc['plan.freeHint']}'
                               : active && user?.expiresAt != null
-                              ? '${planNameOf(user)} · ${loc.date(user!.expiresAt!)}'
+                              ? '${planNameOf(user)} · ${planDateOf(user!.expiresAt!)}'
                               : planNameOf(user),
                           style: ColituText.small,
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                         if (user?.company != null) ...[
@@ -342,7 +342,7 @@ class _AccountTabState extends State<AccountTab> {
               const SizedBox(height: 12),
               ColituButton(
                 label: isFreePlan(user)
-                    ? loc['plan.upgrade']
+                    ? loc['plan.goPremium']
                     : active
                     ? loc['plan.extend']
                     : loc['plan.choose'],

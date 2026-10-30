@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
 import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
 import 'package:colitu_vpn/colitu/services/warm_spare.dart';
@@ -10,6 +13,60 @@ void main() {
 
   ColituNetworkHints hints({Set<String> blocked = const {'hysteria2'}}) =>
       ColituNetworkHints(clientNetwork: isp, token: 'tok', blocked: blocked);
+
+  group('blocked servers', () {
+    VPNServer server(String id) => VPNServer.fromJson({
+      'id': id,
+      'name': id,
+      'countryCode': 'DE',
+      'available': true,
+    });
+
+    test('read from the server list, kept with the network', () {
+      final parsed = ColituNetworkHints.fromServers({
+        'network_hints': {
+          'blocked': [],
+          'blocked_servers': ['node-b', 'node-a'],
+          'scope': 'country',
+        },
+      }, isp)!;
+      expect(parsed.blockedServersFor(isp), {'node-a', 'node-b'});
+      expect(parsed.blockedServersFor('TR-AS2'), isEmpty);
+      final stored = ColituNetworkHints.decode(jsonEncode(parsed.toJson()));
+      expect(stored.blockedServersFor(isp), {'node-a', 'node-b'});
+      // A record stored before server hints reads as none.
+      expect(
+        ColituNetworkHints.decode('{"network":"$isp","blocked":[]}')
+            .blockedServersFor(isp),
+        isEmpty,
+      );
+    });
+
+    test('hinted servers go last, before own penalties, except the last good one', () {
+      final servers = [server('blocked'), server('own'), server('a'), server('good')];
+      final memory = ColituAdaptiveMemory()
+        ..penalize(net, 'own', now.subtract(const Duration(minutes: 5)))
+        ..recordSuccess(net, 'good', 'vless-reality', now.subtract(const Duration(minutes: 10)));
+      final pings = {
+        for (final (id, ms) in [('blocked', 20), ('own', 30), ('a', 50), ('good', 60)])
+          id: ColituPing(ms: ms, at: now.subtract(const Duration(minutes: 1)), network: net),
+      };
+      List<String> rank(Set<String> hinted) => [
+        for (final s in rankServers(
+          servers,
+          pings: pings,
+          memory: memory,
+          network: net,
+          clientCountry: 'RU',
+          now: now,
+          hintedServers: hinted,
+        ))
+          s.id,
+      ];
+      expect(rank({'blocked', 'good'}), ['good', 'a', 'blocked', 'own']);
+      expect(rank(const {}), ['good', 'blocked', 'a', 'own']);
+    });
+  });
 
   group('server list', () {
     test('token and hints are read with a known network only', () {

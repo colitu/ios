@@ -330,9 +330,17 @@ class _NewRequestState extends State<_NewRequest> {
               const SizedBox(height: 14),
               Padding(
                 padding: const EdgeInsets.only(left: 4, bottom: 6),
-                child: Text(loc['support.message'], style: ColituText.small.copyWith(fontWeight: FontWeight.w600)),
+                child: ExcludeSemantics(
+                  child: Text(loc['support.message'], style: ColituText.small.copyWith(fontWeight: FontWeight.w600)),
+                ),
               ),
-              _TextArea(controller: _message, hint: loc['support.messageHint'], minLines: 5, enabled: !_sending),
+              _TextArea(
+                controller: _message,
+                label: loc['support.message'],
+                hint: loc['support.messageHint'],
+                minLines: 5,
+                enabled: !_sending,
+              ),
               const SizedBox(height: 10),
               _FileChips(files: _files, onRemove: (file) => setState(() => _files.remove(file))),
               _AttachButtons(
@@ -634,9 +642,21 @@ class _SupportThreadState extends State<_SupportThread> {
                         onPicked: (files) => setState(() => _files.addAll(files)),
                         onError: (message) => showColituToast(context, message, error: true),
                       ),
-                      Expanded(child: _TextArea(controller: _reply, hint: loc['support.reply'], minLines: 1, maxLines: 5, enabled: !_sending)),
+                      Expanded(
+                        child: _TextArea(
+                          controller: _reply,
+                          label: loc['support.reply'],
+                          hint: loc['support.reply'],
+                          minLines: 1,
+                          maxLines: 5,
+                          enabled: !_sending,
+                        ),
+                      ),
                       const SizedBox(width: 8),
-                      ColituPressable(
+                      Semantics(
+                        button: true,
+                        label: loc['support.sendReply'],
+                        child: ColituPressable(
                         onTap: _send,
                         child: Container(
                           width: 46,
@@ -647,6 +667,7 @@ class _SupportThreadState extends State<_SupportThread> {
                               ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: ColituColors.onAccent))
                               : const Icon(CupertinoIcons.paperplane_fill, size: 20, color: ColituColors.onAccent),
                         ),
+                      ),
                       ),
                     ],
                   ),
@@ -922,6 +943,7 @@ class _FileChips extends StatelessWidget {
                     ),
                   ),
                   IconButton(
+                    tooltip: ColituLoc.I.format('support.removeFile', {'name': file.name}),
                     visualDensity: VisualDensity.compact,
                     onPressed: () => onRemove(file),
                     icon: const Icon(CupertinoIcons.xmark, size: 14, color: ColituColors.dim),
@@ -938,6 +960,7 @@ class _FileChips extends StatelessWidget {
 class _TextArea extends StatelessWidget {
   const _TextArea({
     required this.controller,
+    required this.label,
     required this.hint,
     this.minLines = 1,
     this.maxLines = 10,
@@ -945,6 +968,9 @@ class _TextArea extends StatelessWidget {
   });
 
   final TextEditingController controller;
+
+  /// What a screen reader calls the field.
+  final String label;
   final String hint;
   final int minLines;
   final int maxLines;
@@ -952,7 +978,9 @@ class _TextArea extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return Semantics(
+      label: label,
+      child: TextField(
       controller: controller,
       enabled: enabled,
       minLines: minLines,
@@ -981,6 +1009,7 @@ class _TextArea extends StatelessWidget {
           borderRadius: BorderRadius.circular(ColituRadius.md),
           borderSide: const BorderSide(color: ColituColors.violet),
         ),
+      ),
       ),
     );
   }
