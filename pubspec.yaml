@@ -47,7 +47,7 @@ dependencies:
   #---------- third party plugin
   drift: ^2.32.1
   drift_flutter: ^0.3.0
-  sqlite3: ^3.3.1
+  sqlite3: ^3.7.1
 
   dio: ^5.9.2
   uuid: ^4.5.3
