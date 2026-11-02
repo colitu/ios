@@ -17,6 +17,20 @@ class ColituVerifyException implements Exception {
   String toString() => 'ColituVerifyException(${tunnelFailure ?? ''})';
 }
 
+/// The packet-tunnel extension never started after the system was asked to
+/// start it (no sign of life in its stability log within the start
+/// timeout). Every transport and server would fail the same way and none of
+/// them is to blame: the connect stops, no server is penalized or named, and
+/// the user is asked to restart the phone.
+class ColituEngineNotStartedException implements Exception {
+  const ColituEngineNotStartedException();
+
+  static const code = 'ENGINE_NOT_STARTED';
+
+  @override
+  String toString() => 'ColituEngineNotStartedException($code)';
+}
+
 /// Thrown when the plan does not allow connecting; the UI sends the user to
 /// the plan page instead of showing a plain error.
 class ColituPlanRequiredException implements Exception {
@@ -28,6 +42,9 @@ class ColituPlanRequiredException implements Exception {
 String colituErrorMessage(Object error, {bool signingIn = false}) {
   final loc = ColituLoc.I;
   if (error is ColituPlanRequiredException) return loc['err.noPlan'];
+  if (error is ColituEngineNotStartedException) {
+    return loc['err.engineNotStarted'];
+  }
   if (error is ColituVerifyException) {
     return switch (error.tunnelFailure) {
       'no_socket_fd' => loc['err.tun'],

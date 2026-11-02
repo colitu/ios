@@ -445,6 +445,19 @@ class ColituWhitelistCheck {
       '${on ? 'on' : 'off'}:f$foreignOk/$foreignTotal:d$domesticOk/$domesticTotal';
 }
 
+/// What app start does with the saved whitelist state.
+enum ColituWhitelistRestore {
+  /// Nothing to bring back (no state, or the mode was off).
+  none,
+
+  /// Same network, checked at most 5 minutes ago: the mode is on again.
+  on,
+
+  /// The mode was on, but on another network or too long ago: one check
+  /// decides.
+  recheck,
+}
+
 /// Whitelist mode (mobile operators that let only allowed addresses
 /// through): detection with the VPN off and after two connection failures in
 /// a row, a re-check every 5 minutes while it holds.
@@ -468,6 +481,52 @@ abstract final class ColituWhitelist {
   static const defaultProbe = <String, List<String>>{
     'RU': ['ya.ru', 'vk.com', 'gosuslugi.ru', 'mail.ru'],
   };
+
+  /// A found mode is trusted after an app restart for this long.
+  static const restoreMaxAge = Duration(minutes: 5);
+
+  static ColituWhitelistRestore restore(
+    ({bool on, DateTime checkedAt, String network})? saved,
+    String network,
+    DateTime now,
+  ) {
+    if (saved == null || !saved.on) return ColituWhitelistRestore.none;
+    final age = now.difference(saved.checkedAt);
+    return saved.network == network && !age.isNegative && age <= restoreMaxAge
+        ? ColituWhitelistRestore.on
+        : ColituWhitelistRestore.recheck;
+  }
+
+  static String encodeSaved(
+    ({bool on, DateTime checkedAt, String network}) saved,
+  ) => jsonEncode({
+    'on': saved.on,
+    'checked_at': saved.checkedAt.millisecondsSinceEpoch,
+    'network': saved.network,
+  });
+
+  static ({bool on, DateTime checkedAt, String network})? decodeSaved(
+    String? raw,
+  ) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final json = jsonDecode(raw);
+      if (json is! Map) return null;
+      final on = json['on'];
+      final at = json['checked_at'];
+      final network = json['network'];
+      if (on is! bool || at is! num || network is! String || network.trim().isEmpty) {
+        return null;
+      }
+      return (
+        on: on,
+        checkedAt: DateTime.fromMillisecondsSinceEpoch(at.toInt()),
+        network: network,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 
   static bool isWhitelist(int foreignOk, int domesticOk) =>
       foreignOk <= foreignMaxOk && domesticOk >= domesticMinOk;

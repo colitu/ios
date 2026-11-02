@@ -300,6 +300,42 @@ class ColituVPNService {
     return;
   }
 
+  /// The packet-tunnel extension wrote to its stability log at or after
+  /// [since] (its first line on every start is the "startTunnel" state
+  /// change): the system did start it. Timestamps have second precision, so
+  /// two seconds of slack are allowed.
+  Future<bool> tunnelStartedSince(DateTime since) async {
+    for (final name in ['stability_log.jsonl', 'stability_log.prev.jsonl']) {
+      final file = File(p.join(VpnConstants.runDir, name));
+      try {
+        if (!await file.exists()) continue;
+        if (stabilityLogShowsStart(await file.readAsLines(), since)) return true;
+      } catch (_) {
+        // A write of the extension can race with this read.
+      }
+    }
+    return false;
+  }
+
+  /// [lines] (stability_log.jsonl) hold an entry stamped at or after
+  /// [since] minus two seconds.
+  @visibleForTesting
+  static bool stabilityLogShowsStart(List<String> lines, DateTime since) {
+    final from = since.toUtc().subtract(const Duration(seconds: 2));
+    for (final line in lines.reversed.take(200)) {
+      Object? value;
+      try {
+        value = jsonDecode(line);
+      } catch (_) {
+        continue;
+      }
+      if (value is! Map) continue;
+      final at = DateTime.tryParse('${value['timestamp'] ?? ''}');
+      if (at != null && !at.toUtc().isBefore(from)) return true;
+    }
+    return false;
+  }
+
   Future<String?> latestTunnelFailureReason() async {
     final file = File(p.join(VpnConstants.runDir, 'stability_log.jsonl'));
     if (!await file.exists()) return null;

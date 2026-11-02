@@ -75,6 +75,8 @@ abstract final class ColituAcEvents {
       return failure.isEmpty ? 'blocked' : 'core_crash';
     }
     if (error is ColituPlanRequiredException) return 'auth';
+    // The phone's own service never started: no server is to blame.
+    if (error is ColituEngineNotStartedException) return 'other';
     if (error is APIException) {
       final backend = (error.backendCode ?? '').toUpperCase();
       if (backend == 'QUOTA_EXCEEDED' || backend == 'FREE_DAILY_LIMIT_REACHED') {

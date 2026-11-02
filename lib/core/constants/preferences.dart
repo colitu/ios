@@ -347,6 +347,15 @@ class PreferencesKey {
 
   static const _colituAc4Remote = "colituAc4Remote";
   static const _colituWhitelistProbe = "colituWhitelistProbe";
+  static const _colituWhitelistState = "colituWhitelistState";
+
+  /// AC4 whitelist mode as of the last check, with its time and network
+  /// key (JSON); restored after an app restart.
+  Future<String?> readColituWhitelistState() =>
+      _prefs.getString(_colituWhitelistState);
+
+  Future<void> saveColituWhitelistState(String value) =>
+      _prefs.setString(_colituWhitelistState, value);
   static const _colituAcModel = "colituAcModel";
   static const _colituLmHistory = "colituLmHistory";
 

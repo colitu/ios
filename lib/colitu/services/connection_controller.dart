@@ -572,6 +572,8 @@ class ColituConnectionController extends ChangeNotifier
       unawaited(_refreshRecoverySetIfDue());
       // Adaptive Connect 4: the decision model (1 h cache, switch on only).
       unawaited(_refreshAcModelIfDue());
+      // Whitelist mode found shortly before a restart holds again.
+      unawaited(restoreWhitelistMode());
       unawaited(_sendTelemetry());
       return true;
     } catch (e, stack) {
@@ -1151,7 +1153,78 @@ class ColituConnectionController extends ChangeNotifier
   void _leaveWhitelistMode() {
     _whitelistTimer?.cancel();
     _whitelistTimer = null;
+    if (_whitelistMode) _saveWhitelistState(false, DateTime.now());
     _whitelistMode = false;
+  }
+
+  /// The packet-tunnel extension showed a sign of life since [since]; tests
+  /// swap in a fake.
+  @visibleForTesting
+  Future<bool> Function(DateTime since)? extensionStartedProbe;
+
+  Future<bool> _extensionStarted(DateTime since) async {
+    try {
+      final probe = extensionStartedProbe;
+      return probe != null
+          ? await probe(since)
+          : await _vpnService.tunnelStartedSince(since);
+    } catch (_) {
+      // Unknown: treated as started (the old behaviour).
+      return true;
+    }
+  }
+
+  var _whitelistRestored = false;
+
+  /// The mode as of the last check on this network, kept across restarts.
+  void _saveWhitelistState(bool on, DateTime at) {
+    final encoded = ColituWhitelist.encodeSaved(
+      (on: on, checkedAt: at, network: networkKey),
+    );
+    unawaited(
+      _quietly(() => PreferencesKey().saveColituWhitelistState(encoded)),
+    );
+  }
+
+  /// Once after the first load: whitelist mode found on this network at
+  /// most 5 minutes ago is on again right away (the re-check runs when the
+  /// 5 minutes are up); found earlier or on another network, one check
+  /// decides; off or never found, nothing happens.
+  @visibleForTesting
+  Future<void> restoreWhitelistMode() async {
+    if (_whitelistRestored || !ColituAc4Switch.enabled) return;
+    _whitelistRestored = true;
+    try {
+      final saved = ColituWhitelist.decodeSaved(
+        await PreferencesKey().readColituWhitelistState(),
+      );
+      try {
+        await _refreshNetwork();
+      } catch (_) {}
+      final now = DateTime.now();
+      switch (ColituWhitelist.restore(saved, networkKey, now)) {
+        case ColituWhitelistRestore.none:
+          return;
+        case ColituWhitelistRestore.on:
+          _whitelistMode = true;
+          _whitelistCheckedAt = saved!.checkedAt;
+          debugPrint('Whitelist mode restored (checked ${now.difference(saved.checkedAt).inSeconds} s ago on this network)');
+          _whitelistTimer?.cancel();
+          final left = ColituWhitelist.recheckEvery - now.difference(saved.checkedAt);
+          _whitelistTimer = Timer(left.isNegative ? Duration.zero : left, () {
+            unawaited(checkWhitelist('re-check', afterFailures: false));
+            _whitelistTimer = Timer.periodic(
+              ColituWhitelist.recheckEvery,
+              (_) => unawaited(checkWhitelist('re-check', afterFailures: false)),
+            );
+          });
+          _notify();
+        case ColituWhitelistRestore.recheck:
+          await checkWhitelist('restore', afterFailures: false);
+      }
+    } catch (e) {
+      debugPrint('Whitelist mode not restored: ${e.runtimeType}');
+    }
   }
 
   /// One whitelist check (≤ 4 s, TCP 443 to the foreign and domestic sets).
@@ -1219,6 +1292,7 @@ class ColituConnectionController extends ChangeNotifier
         'state': next ? 'on' : 'off',
         'flag': check.flag(next),
       });
+      _saveWhitelistState(next, now);
       if (next == was) return;
       _whitelistMode = next;
       _telemetry.whitelist(
@@ -1638,9 +1712,11 @@ class ColituConnectionController extends ChangeNotifier
         return;
       }
       // A real failure or "no internet" (under an operator whitelist the
-      // direct check fails too); plan and account errors do not count.
+      // direct check fails too); plan and account errors and a tunnel
+      // extension that never started do not count.
       final why = ColituAcEvents.reasonOfError(e);
-      countedFailure = why != 'auth' && why != 'quota';
+      countedFailure =
+          why != 'auth' && why != 'quota' && e is! ColituEngineNotStartedException;
       await _resetTunnelState();
       if (reconnect &&
           !recovery &&
@@ -1676,7 +1752,10 @@ class ColituConnectionController extends ChangeNotifier
       }
       // Engine/state errors are reported with the extension's last failure
       // reason so the message can say why the tunnel didn't start.
-      final Object reported = e is APIException || e is ColituVerifyException
+      final Object reported =
+          e is APIException ||
+              e is ColituVerifyException ||
+              e is ColituEngineNotStartedException
           ? e
           : e is TimeoutException
           ? e
@@ -2134,6 +2213,7 @@ class ColituConnectionController extends ChangeNotifier
         if (serial != _connectSerial) return superseded;
         _live = _LiveTunnel(configId, server, config, lastProtocol);
         var started = false;
+        final startAt = DateTime.now();
         try {
           await engine.VpnService().startVpn(configId).timeout(_engineStartTimeout);
           started = await _waitForVpnState(configId, timeout: _engineStateWait);
@@ -2146,6 +2226,21 @@ class ColituConnectionController extends ChangeNotifier
           started = state.runningId == configId && !state.vpnLoading;
         }
         if (serial != _connectSerial) return superseded;
+        if (!started && !await _extensionStarted(startAt)) {
+          // iOS never started the packet-tunnel extension: every transport
+          // and server would fail the same way and none is to blame.
+          if (serial != _connectSerial) return superseded;
+          debugPrint(
+            'The packet tunnel never started ($lastProtocol, ${DateTime.now().difference(startAt).inMilliseconds} ms): engine not started',
+          );
+          ColituEngineJournal.instance.add('engine_not_started', {
+            'protocol': ?lastProtocol,
+            'ms': DateTime.now().difference(startAt).inMilliseconds,
+          });
+          // No Adaptive Connect event names a server for it.
+          _telemetry.tryingServer(nodeId: null);
+          throw const ColituEngineNotStartedException();
+        }
         // A tunnel the system did not bring up in time is skipped like a
         // stalled one: the next transport gets its turn instead of the whole
         // connect failing.

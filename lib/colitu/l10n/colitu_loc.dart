@@ -1130,6 +1130,11 @@ class ColituLoc extends ChangeNotifier {
       'VPN izni verilmedi. Ayarlar › VPN’den Colitu’ya izin verin.',
       'VPN permission was denied. Allow Colitu in Settings › VPN.',
     ],
+    'err.engineNotStarted': [
+      'Не удалось запустить службу подключения. Перезагрузите телефон и попробуйте снова.',
+      'Bağlantı servisi başlatılamadı. Telefonu yeniden başlatıp tekrar deneyin.',
+      'The connection service could not be started. Restart your phone and try again.',
+    ],
     'err.engine': [
       'VPN-движок не запустился с этой конфигурацией. Попробуйте ещё раз.',
       'VPN motoru bu yapılandırmayla başlayamadı. Tekrar deneyin.',
