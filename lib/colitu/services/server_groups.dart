@@ -40,7 +40,8 @@ int? bestPingOf(
 ///
 /// Groups appear in the order their first server appears and the servers keep
 /// their order inside a group, so whatever sort produced [servers] applies to
-/// the countries and to the cities alike. With [flat] (a search is active)
+/// the countries and to the cities alike, except that a recommended server
+/// goes first inside its country. With [flat] (a search is active)
 /// every server stays its own group, in the original order.
 List<ServerGroup> groupServersByCountry(
   List<VPNServer> servers, {
@@ -63,7 +64,14 @@ List<ServerGroup> groupServersByCountry(
       list.add(server);
     }
   }
-  return [for (final key in order) ServerGroup(key, byKey[key]!)];
+  return [
+    for (final key in order)
+      ServerGroup(key, [
+        // The panel's recommended server of a country leads it (stable).
+        ...byKey[key]!.where((s) => s.isRecommended),
+        ...byKey[key]!.where((s) => !s.isRecommended),
+      ]),
+  ];
 }
 
 String _key(VPNServer server, {bool unique = false}) {

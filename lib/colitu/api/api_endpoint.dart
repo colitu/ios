@@ -44,6 +44,9 @@ abstract final class APIEndpoint {
   /// Adaptive Connect 3.0 recovery set (up to 4 configs, ~14 days).
   static const clientRecovery = '/client/recovery';
 
+  /// Adaptive Connect 4 decision model (weights + country priors, refreshed hourly).
+  static const acModel = '/client/ac-model';
+
   /// Multihop (double VPN) routes; a route's config has the same envelope as
   /// `/config`.
   static const multihopServers = '/multihop/servers';

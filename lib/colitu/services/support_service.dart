@@ -219,8 +219,14 @@ class ColituSupportService {
   }
 
   /// Sends the automatic report of a new conversation.
-  Future<void> uploadDiagnostics(String conversationId, String report) async {
-    final payload = await _reportPayload(report);
+  /// [engine]: the Adaptive Connect engine section (already masked, see
+  /// [ColituDiagnosticsEngine]); left out when null.
+  Future<void> uploadDiagnostics(
+    String conversationId,
+    String report, {
+    Map<String, dynamic>? engine,
+  }) async {
+    final payload = await _reportPayload(report, engine: engine);
     await _client.postRenewing(
       APIEndpoint.supportDiagnostics(conversationId),
       (_) => null,
@@ -230,8 +236,12 @@ class ColituSupportService {
 
   /// Answers an agent's request. A 404 means it is no longer pending: the
   /// report is not needed and nothing is thrown.
-  Future<void> answerDiagnosticsRequest(String requestId, String report) async {
-    final payload = await _reportPayload(report);
+  Future<void> answerDiagnosticsRequest(
+    String requestId,
+    String report, {
+    Map<String, dynamic>? engine,
+  }) async {
+    final payload = await _reportPayload(report, engine: engine);
     try {
       await _client.postRenewing(
         APIEndpoint.supportDiagnosticsReport(requestId),
@@ -243,7 +253,10 @@ class ColituSupportService {
     }
   }
 
-  Future<Map<String, dynamic>> _reportPayload(String report) async {
+  Future<Map<String, dynamic>> _reportPayload(
+    String report, {
+    Map<String, dynamic>? engine,
+  }) async {
     final package = await PackageInfo.fromPlatform();
     var os = Platform.operatingSystemVersion;
     try {
@@ -254,6 +267,7 @@ class ColituSupportService {
       'platform': Platform.isIOS ? 'ios' : Platform.operatingSystem,
       'app_version': '${package.version}+${package.buildNumber}',
       'os_version': os,
+      'engine': ?engine,
     };
   }
 

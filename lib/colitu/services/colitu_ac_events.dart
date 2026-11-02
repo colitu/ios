@@ -275,6 +275,31 @@ abstract final class ColituAcEvents {
     };
   }
 
+  /// AC4 whitelist mode entered ([on]) or left: how many hosts of the
+  /// foreign and domestic sets answered. No node: the panel stores it per
+  /// country + ASN only. Null unless both totals are 1..10.
+  static Map<String, dynamic>? whitelist({
+    required bool on,
+    required int foreignOk,
+    required int foreignTotal,
+    required int domesticOk,
+    required int domesticTotal,
+    required int ms,
+  }) {
+    if (foreignTotal < 1 || foreignTotal > 10) return null;
+    if (domesticTotal < 1 || domesticTotal > 10) return null;
+    int clampTo(int value, int max) => value < 0 ? 0 : (value > max ? max : value);
+    return {
+      'kind': 'whitelist',
+      'state': on ? 'on' : 'off',
+      'foreign_ok': clampTo(foreignOk, foreignTotal),
+      'foreign_total': foreignTotal,
+      'domestic_ok': clampTo(domesticOk, domesticTotal),
+      'domestic_total': domesticTotal,
+      'ms': _clamp(ms),
+    };
+  }
+
   /// The link type for the request: wifi / cellular / ethernet / other, else
   /// empty (none, unknown).
   static String networkTypeOf(String? link) {

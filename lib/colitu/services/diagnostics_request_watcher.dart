@@ -15,6 +15,7 @@ class DiagnosticsRequestWatcher with WidgetsBindingObserver {
   DiagnosticsRequestWatcher({
     required this.api,
     required this.buildReport,
+    this.buildEngine,
     this.onSent,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
@@ -24,6 +25,9 @@ class DiagnosticsRequestWatcher with WidgetsBindingObserver {
 
   final ColituSupportService api;
   final Future<String> Function() buildReport;
+
+  /// The Adaptive Connect engine section sent with the report (optional).
+  final Map<String, dynamic>? Function()? buildEngine;
 
   /// Called once after the report was sent (not for a failure).
   final void Function()? onSent;
@@ -63,7 +67,15 @@ class DiagnosticsRequestWatcher with WidgetsBindingObserver {
       final retry = _retryAfter;
       if (retry != null && _clock().isBefore(retry)) return;
       try {
-        await api.answerDiagnosticsRequest(request.id, await buildReport());
+        Map<String, dynamic>? engine;
+        try {
+          engine = buildEngine?.call();
+        } catch (_) {}
+        await api.answerDiagnosticsRequest(
+          request.id,
+          await buildReport(),
+          engine: engine,
+        );
         _answered.add(request.id);
         _retryAfter = null;
         if (!_disposed) {

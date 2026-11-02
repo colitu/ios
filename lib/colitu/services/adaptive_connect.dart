@@ -39,7 +39,12 @@ String colituLinkKind(Iterable<(String, List<bool>)> interfaces) {
 /// timed out or the address was unreachable, with when and on which network
 /// it was measured.
 class ColituPing {
-  const ColituPing({required this.ms, required this.at, required this.network});
+  const ColituPing({
+    required this.ms,
+    required this.at,
+    required this.network,
+    this.vpnOff = false,
+  });
 
   /// A ping counts for the ranking this long, on the network it was taken on.
   static const freshFor = Duration(minutes: 10);
@@ -52,6 +57,9 @@ class ColituPing {
   final int? ms;
   final DateTime at;
   final String network;
+
+  /// Measured with the VPN off (a direct connect from the app).
+  final bool vpnOff;
 
   bool get failed => ms == null;
 
@@ -73,6 +81,7 @@ class ColituPing {
     'ms': ms,
     'at': at.millisecondsSinceEpoch,
     'net': network,
+    if (vpnOff) 'off': true,
   };
 
   /// Reads one stored ping; a bare number is the older format (no time, no
@@ -92,6 +101,7 @@ class ColituPing {
       ms: ms is num ? ms.toInt() : null,
       at: DateTime.fromMillisecondsSinceEpoch(at is num ? at.toInt() : 0),
       network: value['net'] is String ? value['net'] as String : '',
+      vpnOff: value['off'] == true,
     );
   }
 

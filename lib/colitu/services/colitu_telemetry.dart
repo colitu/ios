@@ -321,6 +321,25 @@ class ColituTelemetry {
   void choice(String chosenId, Map<String, int?> candidates) =>
       _record(ColituAcEvents.choice(chosenId, candidates));
 
+  /// AC4 whitelist mode entered or left (see [ColituAcEvents.whitelist]).
+  void whitelist({
+    required bool on,
+    required int foreignOk,
+    required int foreignTotal,
+    required int domesticOk,
+    required int domesticTotal,
+    required int ms,
+  }) => _record(
+    ColituAcEvents.whitelist(
+      on: on,
+      foreignOk: foreignOk,
+      foreignTotal: foreignTotal,
+      domesticOk: domesticOk,
+      domesticTotal: domesticTotal,
+      ms: ms,
+    ),
+  );
+
   /// The features in use while a connection is up (names only).
   void features(Iterable<String> names) => metrics.features(names);
 

@@ -26,6 +26,17 @@ class VPNServer {
   final bool isFree;
   final bool isRecommended;
   final int? load;
+
+  /// The panel's load as sent (low, medium, high); null when unknown.
+  final String? loadLevel;
+
+  /// AC4: the entry address works under mobile operators' whitelists
+  /// (`whitelist_ok`); only these are candidates in whitelist mode.
+  final bool whitelistOk;
+
+  /// Protocols the panel lists for the server (lower case); the AC4
+  /// candidates are server × protocol.
+  final List<String> protocols;
   final String? healthCheckUrl;
   final String? testUrl;
   final String? host;
@@ -96,6 +107,9 @@ class VPNServer {
     required this.isFree,
     required this.isRecommended,
     this.load,
+    this.loadLevel,
+    this.whitelistOk = false,
+    this.protocols = const [],
     this.healthCheckUrl,
     this.testUrl,
     this.host,
@@ -248,6 +262,23 @@ class VPNServer {
       isFree: _bool(json['free']) || !premium,
       isRecommended: _bool(json['isRecommended'] ?? json['recommended']),
       load: _loadPercent(json['load']),
+      loadLevel: switch ('${json['load']}'.trim().toLowerCase()) {
+        final level when level == 'low' || level == 'medium' || level == 'high' =>
+          level,
+        _ => null,
+      },
+      whitelistOk: json['whitelist_ok'] == true,
+      protocols: json['protocols'] is List
+          ? [
+              for (final value in (json['protocols'] as List)
+                  .whereType<String>()
+                  .map((v) => v.trim().toLowerCase())
+                  .where((v) => v.isNotEmpty && v.length <= 32)
+                  .toSet()
+                  .take(16))
+                value,
+            ]
+          : const [],
       healthCheckUrl: _nullableString(
         json['healthCheckUrl'] ?? json['health_check_url'] ?? json['healthUrl'],
       ),

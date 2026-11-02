@@ -11,6 +11,11 @@ import 'package:colitu_vpn/colitu/config/colitu_clock.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ad_block.dart';
 import 'package:colitu_vpn/colitu/services/colitu_system_doh.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ac_events.dart';
+import 'package:colitu_vpn/colitu/services/colitu_lm.dart';
+import 'package:colitu_vpn/colitu/services/colitu_lm_engine.dart';
+import 'package:colitu_vpn/colitu/services/engine_journal.dart';
+import 'package:colitu_vpn/colitu/services/diagnostics_engine.dart';
+import 'package:colitu_vpn/colitu/services/site_redaction.dart';
 import 'package:colitu_vpn/colitu/services/colitu_ru_bypass.dart';
 import 'package:colitu_vpn/colitu/services/colitu_split_tunnel.dart';
 import 'package:colitu_vpn/colitu/services/colitu_telemetry.dart';
@@ -25,8 +30,10 @@ import 'package:colitu_vpn/colitu/passport/passport_client.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
 import 'package:colitu_vpn/colitu/services/app_session.dart';
 import 'package:colitu_vpn/colitu/services/colitu_vpn_config_adapter.dart';
+import 'package:colitu_vpn/colitu/services/reachability.dart';
 import 'package:colitu_vpn/colitu/services/recovery_set.dart';
 import 'package:colitu_vpn/colitu/services/server_latency.dart';
+import 'package:colitu_vpn/colitu/services/server_shortcuts.dart';
 import 'package:colitu_vpn/colitu/services/stall_watch.dart';
 import 'package:colitu_vpn/colitu/services/ui_mode.dart';
 import 'package:colitu_vpn/colitu/services/vpn_service.dart';
@@ -499,6 +506,7 @@ class ColituConnectionController extends ChangeNotifier
     _clockTimer?.cancel();
     _supportTimer?.cancel();
     _splitRestart?.cancel();
+    _whitelistTimer?.cancel();
     super.dispose();
   }
 
@@ -562,6 +570,8 @@ class ColituConnectionController extends ChangeNotifier
       if (!offline) await _loadRotationQuietly();
       _notify();
       unawaited(_refreshRecoverySetIfDue());
+      // Adaptive Connect 4: the decision model (1 h cache, switch on only).
+      unawaited(_refreshAcModelIfDue());
       unawaited(_sendTelemetry());
       return true;
     } catch (e, stack) {
@@ -717,17 +727,555 @@ class ColituConnectionController extends ChangeNotifier
 
   /// Automatic-mode order (Adaptive Connect). The first one is both the
   /// "Recommended" entry and the "Fastest server" connect target.
-  List<VPNServer> get rankedServers => rankServers(
-    servers,
-    pings: _pings,
-    memory: _memory,
-    network: networkKey,
-    clientCountry: _clientCountry,
-    now: DateTime.now(),
-    hintedServers: _hints.blockedServersFor(_clientNetwork),
-  );
+  List<VPNServer> get rankedServers => _ranked(forConnect: false);
+
+  /// With `features.ac_engine_4` on and a model fetched, the AC4 decision
+  /// model orders the servers; otherwise (switch off, no model, unknown
+  /// model version) the AC 3 rules do, unchanged. [forConnect]: the
+  /// decision is journaled and its protocol leads on its server.
+  List<VPNServer> _ranked({required bool forConnect}) {
+    final now = DateTime.now();
+    final network = networkKey;
+    if (ColituAc4Switch.enabled) {
+      final ordered = _decideAc4(network, now, forConnect: forConnect);
+      if (ordered != null) return ordered;
+    }
+    if (forConnect) _lastOrderEngine = ColituLm.engineAc3;
+    return rankServers(
+      _autoCandidates,
+      pings: _pings,
+      memory: _memory,
+      network: network,
+      clientCountry: _clientCountry,
+      now: now,
+      hintedServers: _hints.blockedServersFor(_clientNetwork),
+    );
+  }
 
   VPNServer? _bestServer() => rankedServers.firstOrNull;
+
+  /// Which servers answered the VPN-off ping rounds (AC4 phase 1): one that
+  /// failed two rounds in a row leaves the list and the automatic choice.
+  final reachability = ServerReachability();
+
+  /// The server the tunnel is being started to (see [_neverHidden]).
+  String? _connectingKey;
+
+  /// Servers that are never hidden: the connected one, the one being
+  /// connected to and the one the user picked.
+  Iterable<String?> get _neverHidden => [
+    connectedServer?.selectionKey,
+    if (status == ColituVpnStatus.connecting) _connectingKey,
+    if (!autoSelection) selectedServer?.selectionKey,
+  ];
+
+  /// Node id used for reachability; routes (multihop) have none.
+  static String? _nodeKey(VPNServer server) =>
+      server.isMultihop ? null : server.selectionKey;
+
+  /// The servers the automatic choice may take: the unreachable ones are
+  /// left out.
+  List<VPNServer> get _autoCandidates =>
+      reachability.visible(servers, _nodeKey, keep: _neverHidden);
+
+  /// The servers the list shows: the unreachable ones are left out, except
+  /// the connected, connecting and picked ones and the favourites. Servers
+  /// in Russia only for a Russian-language app or a network in Russia.
+  List<VPNServer> get visibleServers => reachability
+      .visible(servers, _nodeKey, keep: [..._neverHidden, ..._favoriteKeys])
+      .where((server) => !ruHidden(server))
+      .toList();
+
+  /// Country of this device's network as the panel last saw it with the
+  /// VPN off.
+  String get networkCountry => _clientCountry;
+
+  /// A server in Russia that the list leaves out (AC4): the app does not
+  /// speak Russian and the network is not in Russia. Never the connected,
+  /// connecting or picked one.
+  bool ruHidden(VPNServer server) =>
+      !ColituRuServers.visible(
+        server,
+        appLanguage: ColituLoc.I.language,
+        networkCountry: _clientCountry,
+      ) &&
+      !_neverHidden.contains(server.selectionKey);
+
+  Iterable<String> get _favoriteKeys {
+    try {
+      return ColituServerShortcuts.instance.favoriteKeys;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// A server that stays in the list only because it is a favourite (or
+  /// picked) although it is unreachable: the list draws it dimmed.
+  bool isDimmed(VPNServer server) =>
+      !server.isMultihop &&
+      reachability
+          .dimmed(servers.map(_nodeKey))
+          .contains(server.selectionKey) &&
+      connectedServer?.selectionKey != server.selectionKey;
+
+  // ── Adaptive Connect 4 (decision model, whitelist mode) ───────────────
+
+  /// The last decision model from the panel (1 h, an older one kept
+  /// offline).
+  final _lmModel = ColituLmModelStore();
+
+  /// This device's outcomes per (network hash, server, protocol); never
+  /// leaves the device.
+  late final _lmHistory = ColituLmHistory(
+    save: (encoded) =>
+        unawaited(_quietly(() => PreferencesKey().saveColituLmHistory(encoded))),
+  );
+
+  /// Exploration seed: a new one per automatic connect, so the list shows
+  /// what the connect will use.
+  var _lmSeed = ColituLm.randomSeed();
+
+  /// The protocol the decision chose for its server (tried first there).
+  ({String server, String protocol})? _lmLead;
+
+  /// Engine of the last automatic connect order: "ac4" or "ac3".
+  var _lastOrderEngine = ColituLm.engineAc3;
+
+  /// Domestic hosts per country for the whitelist check (`whitelist_probe`).
+  var _whitelistProbe = <String, List<String>>{};
+  var _whitelistMode = false;
+  var _whitelistChecking = false;
+  DateTime? _whitelistCheckedAt;
+  Timer? _whitelistTimer;
+
+  /// Connects that failed in a row (offline ones too): two start a
+  /// whitelist check.
+  var _connectFailuresInRow = 0;
+
+  /// The whitelist check's TCP probe; tests swap in a fake.
+  @visibleForTesting
+  Future<bool> Function(String host, int port, Duration timeout)?
+  whitelistReachable;
+
+  /// `GET /client/ac-model`; tests swap in a fake.
+  @visibleForTesting
+  Future<ColituLmModel?> Function(String? networkToken)? acModelFetch;
+
+  /// AC4 whitelist mode is on (the operator lets only allowed addresses
+  /// through).
+  bool get whitelistMode => _whitelistMode;
+
+  /// The AC4 decision model in use (null: none fetched yet).
+  ColituLmModel? get acModel => _lmModel.model;
+
+  @visibleForTesting
+  void debugSetAcModel(ColituLmModel model, DateTime fetchedAt) =>
+      _lmModel.set(model, fetchedAt);
+
+  @visibleForTesting
+  set debugWhitelistMode(bool on) => _whitelistMode = on;
+
+  @visibleForTesting
+  set debugClientCountry(String country) => _clientCountry = country;
+
+  /// The `engine` section of the support report (AC4 phase 4): the engine
+  /// journal, the servers hidden now, the model version and the flags,
+  /// masked like the report. Null when it cannot be built.
+  Map<String, dynamic>? diagnosticsEngine() {
+    try {
+      final now = DateTime.now();
+      final model = _lmModel.model;
+      return ColituDiagnosticsEngine.build(
+        journal: ColituEngineJournal.instance.snapshot(),
+        modelVersion: model == null
+            ? null
+            : [
+                '${model.version}',
+                ?model.generatedAt,
+                ?_scopeText(model),
+              ].join(' '),
+        flags: {
+          'ac_engine_4': ColituAc4Switch.enabled,
+          'adaptive_connect_3': ColituAc3Switch.enabled,
+          'whitelist_mode': _whitelistMode,
+          'model_country': ?model?.country,
+          'model_prior_scope': ?_scopeText(model),
+          'model_age_h': (_lmModel.ageH(now) * 100).round() / 100,
+          'model_stale': model != null && _lmModel.ageH(now) > ColituLm.staleAfterH,
+          'last_order_engine': _lastOrderEngine,
+          'network_type': ColituAcEvents.networkTypeOf(_link),
+          'network_country': _clientCountry,
+          'auto_selection': autoSelection,
+          'history_records': _lmHistory.count,
+        },
+        hiddenNow: reachability.hidden(servers.map(_nodeKey), keep: _neverHidden),
+        knownHosts: SiteRedaction.serverHosts(servers),
+        now: now,
+      );
+    } catch (e) {
+      debugPrint('Engine report not built: ${e.runtimeType}');
+      return null;
+    }
+  }
+
+  /// The model's prior scope ("RU:city:Moscow"), null when none was sent.
+  static String? _scopeText(ColituLmModel? model) {
+    final text = model?.priorScopeSummary ?? '';
+    return text.isEmpty ? null : text;
+  }
+
+  /// Ping usable for ordering on [network], null when none.
+  int? _usablePing(VPNServer server, String network, DateTime now) {
+    final ping = _pings[server.selectionKey];
+    return ping != null && ping.isUsable(network, now) ? ping.ms : null;
+  }
+
+  /// The AC4 order, or null when the AC 3 rules apply (no model yet,
+  /// unknown version) and whitelist mode has no flagged server.
+  List<VPNServer>? _decideAc4(
+    String network,
+    DateTime now, {
+    required bool forConnect,
+  }) {
+    final candidates = _autoCandidates;
+    int? latency(VPNServer server) => _usablePing(server, network, now);
+    final pairs = ColituLmPlanner.candidates(
+      candidates,
+      latencyMs: latency,
+      hintedServers: _hints.blockedServersFor(_clientNetwork),
+      history: (id, protocol) => _lmHistory.outcomes(network, id, protocol, now),
+    );
+    final input = ColituLmInput(
+      model: _lmModel.model,
+      modelAgeH: _lmModel.ageH(now),
+      engineEnabled: true,
+      country: _clientCountry,
+      networkType: ColituAcEvents.networkTypeOf(_link),
+      whitelistMode: _whitelistMode,
+      seed: _lmSeed,
+      candidates: [for (final pair in pairs) pair.candidate],
+    );
+    final decision = ColituLm.decide(input);
+    if (decision.engine != ColituLm.engineAc4) {
+      // No model yet: AC 3 rules, except that whitelist mode keeps to the
+      // whitelist servers.
+      final whitelist = _whitelistMode
+          ? ColituLmPlanner.whitelistOrder(
+              candidates,
+              latency,
+              networkCountry: _clientCountry,
+            )
+          : const <VPNServer>[];
+      if (forConnect) {
+        _lmLead = null;
+        _lastOrderEngine = ColituLm.engineAc3;
+        _journalDecision(
+          input,
+          decision,
+          pairs,
+          whitelist.isNotEmpty
+              ? 'ac3_whitelist'
+              : _lmModel.model == null
+              ? 'ac3_no_model'
+              : 'ac3_model_version',
+        );
+      }
+      return whitelist.isNotEmpty ? whitelist : null;
+    }
+    final order = ColituLmPlanner.order(decision, pairs);
+    if (forConnect) {
+      _lastOrderEngine = ColituLm.engineAc4;
+      final first = order.servers.firstOrNull;
+      final lead = order.lead;
+      _lmLead = first != null && lead != null
+          ? (server: first.id.toLowerCase(), protocol: lead)
+          : null;
+      final reason = decision.choice == null
+          ? 'no_eligible'
+          : decision.explored
+          ? 'explore'
+          : _whitelistMode && !decision.whitelistNone
+          ? 'whitelist'
+          : 'score';
+      _journalDecision(input, decision, pairs, reason);
+      if (_lmModel.ageH(now) >= ColituLm.refreshAfterH) {
+        unawaited(_refreshAcModelIfDue());
+      }
+    }
+    return order.servers;
+  }
+
+  void _journalDecision(
+    ColituLmInput input,
+    ColituLmDecision decision,
+    List<({ColituLmCandidate candidate, VPNServer server})> pairs,
+    String reason,
+  ) {
+    final choice = decision.choice;
+    ColituEngineJournal.instance.add(ColituEngineJournal.decision, {
+      'engine': decision.engine,
+      'reason': reason,
+      'model_version': input.model?.version,
+      'model_generated_at': input.model?.generatedAt,
+      'model_prior_scope': ?_scopeText(input.model),
+      'model_age_h': (input.modelAgeH * 100).round() / 100,
+      'stale': decision.stale,
+      'explored': decision.explored,
+      'whitelist_mode': input.whitelistMode,
+      'whitelist_none': decision.whitelistNone,
+      'flags': {
+        'ac_engine_4': ColituAc4Switch.enabled,
+        'adaptive_connect_3': ColituAc3Switch.enabled,
+      },
+      'country': input.country,
+      'network_type': input.networkType,
+      'seed': input.seed,
+      'candidates': [
+        for (var i = 0; i < pairs.length; i++)
+          {
+            ...pairs[i].candidate.toJournal(
+              historyCount: pairs[i].candidate.history.length,
+            ),
+            'scored': ?(i < decision.candidates.length
+                ? decision.candidates[i].toJson()
+                : null),
+          },
+      ],
+      'ranking': decision.ranking,
+      'choice': ?(choice != null && choice < pairs.length
+          ? {
+              'node_id': pairs[choice].candidate.nodeId,
+              'protocol': pairs[choice].candidate.protocol,
+            }
+          : null),
+    });
+  }
+
+  /// One outcome of this device with a server and protocol on the current
+  /// network (AC4 history + journal). Kept with the switch off too, so the
+  /// model has the device's own history when it is turned on.
+  void _recordLmOutcome(
+    String? serverId,
+    String? protocol, {
+    required bool ok,
+    String? reason,
+  }) {
+    final id = serverId?.trim() ?? '';
+    final proto = protocol?.trim() ?? '';
+    if (id.length < 8 || id.length > 64 || proto.isEmpty) return;
+    _lmHistory.record(networkKey, id, proto, ok, DateTime.now());
+    ColituEngineJournal.instance.add(ColituEngineJournal.outcome, {
+      'node_id': id,
+      'protocol': proto,
+      'outcome': ok ? 'ok' : 'fail',
+      'reason': ?reason,
+    });
+  }
+
+  /// A ping round with the VPN off: its summary, the servers it hides and,
+  /// when most servers fail, a whitelist check.
+  void _journalPingRound(Map<String, int?> round) {
+    final failed = round.values.where((ms) => ms == null || ms <= 0).length;
+    final now = DateTime.now();
+    ColituEngineJournal.instance.add(ColituEngineJournal.pingRound, {
+      'vpn_off': true,
+      'total': round.length,
+      'ok': round.length - failed,
+      'failed': failed,
+    }, at: now);
+    final hidden = reachability.hidden(round.keys, keep: _neverHidden);
+    if (hidden.isNotEmpty) {
+      ColituEngineJournal.instance.add(ColituEngineJournal.hidden, {
+        'reason': 'unreachable_vpn_off',
+        'servers': hidden.toList()..sort(),
+        'of': round.length,
+      }, at: now);
+    }
+    // Most servers fail with the VPN off: the network may let only
+    // whitelisted addresses through.
+    if (ColituAc4Switch.enabled && round.length >= 2 && failed * 2 >= round.length) {
+      unawaited(
+        checkWhitelist(
+          'most servers unreachable with the VPN off',
+          afterFailures: false,
+        ),
+      );
+    }
+  }
+
+  /// Fetches the AC4 model when it is due (none, older than 1 h, another
+  /// country); never throws.
+  Future<void> _refreshAcModelIfDue() async {
+    if (!ColituAc4Switch.enabled ||
+        !_lmModel.takeFetchSlot(DateTime.now(), _clientCountry)) {
+      return;
+    }
+    try {
+      // With the VPN off the panel takes the country from the request;
+      // through the tunnel from the token.
+      final token = status == ColituVpnStatus.disconnected
+          ? null
+          : _hints.tokenFor(_clientNetwork);
+      final fetch = acModelFetch;
+      final model = await (fetch != null
+              ? fetch(token)
+              : _vpnService.acModel(networkToken: token))
+          .timeout(const Duration(seconds: 15));
+      if (model == null) return;
+      _lmModel.set(model, DateTime.now());
+      final encoded = _lmModel.encode();
+      if (encoded != null) {
+        unawaited(_quietly(() => PreferencesKey().saveColituAcModel(encoded)));
+      }
+      debugPrint(
+        'Adaptive Connect 4 model fetched: version ${model.version}, country ${(model.country ?? '').isEmpty ? '-' : model.country}, priors ${_scopeText(model) ?? '-'}',
+      );
+      _notify();
+    } catch (e) {
+      debugPrint(
+        'Adaptive Connect 4 model fetch failed (${e.runtimeType}); ${_lmModel.model != null ? 'the stale model stays' : 'AC 3 rules until it comes'}',
+      );
+    }
+  }
+
+  /// A connect failed: the second in a row starts a whitelist check.
+  void _noteConnectFailure() {
+    _connectFailuresInRow++;
+    if (_connectFailuresInRow >= 2 && ColituAc4Switch.enabled) {
+      unawaited(
+        checkWhitelist('two connection failures in a row', afterFailures: true),
+      );
+    }
+  }
+
+  void _leaveWhitelistMode() {
+    _whitelistTimer?.cancel();
+    _whitelistTimer = null;
+    _whitelistMode = false;
+  }
+
+  /// One whitelist check (≤ 4 s, TCP 443 to the foreign and domestic sets).
+  /// Only with the VPN off: the app's own sockets would go through the
+  /// tunnel. On entering whitelist mode: a notice, the ac-event, a re-check
+  /// every 5 minutes and, after two failed connects in automatic mode, a
+  /// connect to the best whitelist server. Without any flagged server only
+  /// the notice and the log. It ends when the foreign set works again.
+  /// Never throws.
+  @visibleForTesting
+  Future<void> checkWhitelist(String reason, {required bool afterFailures}) async {
+    if (!ColituAc4Switch.enabled || _whitelistChecking || _disposed) return;
+    if (status != ColituVpnStatus.disconnected) {
+      debugPrint('Whitelist check skipped ($reason): the VPN is not off');
+      return;
+    }
+    final now = DateTime.now();
+    final last = _whitelistCheckedAt;
+    // Outside the 5-minute re-check, at most one check a minute (ping rounds
+    // can be frequent).
+    if (!afterFailures &&
+        reason != 're-check' &&
+        last != null &&
+        now.difference(last) < const Duration(minutes: 1)) {
+      return;
+    }
+    _whitelistChecking = true;
+    try {
+      _whitelistCheckedAt = now;
+      final domestic = ColituWhitelist.domesticSet(_whitelistProbe, _clientCountry);
+      if (domestic.isEmpty) {
+        debugPrint(
+          'Whitelist check skipped ($reason): no domestic hosts for country ${_clientCountry.isEmpty ? '-' : _clientCountry}',
+        );
+        return;
+      }
+      final network = networkKey;
+      final foreign = ColituWhitelist.foreignSet(
+        servers,
+        (server) => _usablePing(server, network, now),
+      );
+      final check = await ColituWhitelist.check(
+        foreign,
+        domestic,
+        reachable: whitelistReachable,
+      );
+      if (_disposed) return;
+      if (status != ColituVpnStatus.disconnected) {
+        debugPrint('Whitelist check dropped ($reason): the VPN came up meanwhile');
+        return;
+      }
+      final was = _whitelistMode;
+      final next = ColituWhitelist.nextState(was, check);
+      debugPrint(
+        'Whitelist check ($reason): foreign ${check.foreignOk}/${check.foreignTotal}, domestic ${check.domesticOk}/${check.domesticTotal}, ${check.ms} ms -> ${next ? 'whitelist mode' : 'normal'}',
+      );
+      ColituEngineJournal.instance.add(ColituEngineJournal.whitelist, {
+        'reason': reason,
+        'foreign_ok': check.foreignOk,
+        'foreign_total': check.foreignTotal,
+        'domestic_ok': check.domesticOk,
+        'domestic_total': check.domesticTotal,
+        'ms': check.ms,
+        'was': was,
+        'state': next ? 'on' : 'off',
+        'flag': check.flag(next),
+      });
+      if (next == was) return;
+      _whitelistMode = next;
+      _telemetry.whitelist(
+        on: next,
+        foreignOk: check.foreignOk,
+        foreignTotal: check.foreignTotal,
+        domesticOk: check.domesticOk,
+        domesticTotal: check.domesticTotal,
+        ms: check.ms,
+      );
+      if (!next) {
+        _leaveWhitelistMode();
+        debugPrint('Whitelist mode ended: the foreign hosts answer again');
+        _notify();
+        return;
+      }
+      _whitelistTimer?.cancel();
+      _whitelistTimer = Timer.periodic(
+        ColituWhitelist.recheckEvery,
+        (_) => unawaited(checkWhitelist('re-check', afterFailures: false)),
+      );
+      final flagged = servers
+          .where((s) => s.whitelistOk && !s.isMultihop && s.available)
+          .length;
+      if (flagged == 0) {
+        debugPrint('Whitelist mode: no server is flagged whitelist_ok; notice only');
+        notice = ColituLoc.I['notice.whitelistNone'];
+        _notify();
+        return;
+      }
+      debugPrint(
+        'Whitelist mode: automatic mode uses the $flagged whitelist server(s), bridges first',
+      );
+      notice = ColituLoc.I['notice.whitelistOn'];
+      _notify();
+      if (afterFailures &&
+          _automatic &&
+          !_userDisconnected &&
+          status == ColituVpnStatus.disconnected) {
+        try {
+          await connect();
+          if (connected) {
+            notice = ColituLoc.I['notice.whitelistOn'];
+            _notify();
+          }
+        } catch (e) {
+          debugPrint(
+            'Whitelist mode: connecting to a whitelist server failed (${e.runtimeType})',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Whitelist check failed: ${e.runtimeType}');
+    } finally {
+      _whitelistChecking = false;
+    }
+  }
 
   /// Reads the stored memory and the last client country and network once.
   /// Created on first use: widget tests build the controller without a
@@ -743,6 +1291,13 @@ class ColituConnectionController extends ChangeNotifier
       _clientNetwork = await prefs.readColituClientNetwork() ?? '';
       _hints = ColituNetworkHints.decode(await prefs.readColituNetworkHints());
       ColituAc3Switch.setRemote(await prefs.readColituAc3Remote());
+      ColituAc4Switch.setRemote(await prefs.readColituAc4Remote());
+      final probe = await prefs.readColituWhitelistProbe();
+      if (probe != null && probe.isNotEmpty) {
+        _whitelistProbe = ColituWhitelist.parseProbe(jsonDecode(probe));
+      }
+      _lmModel.load(await prefs.readColituAcModel());
+      _lmHistory.load(await prefs.readColituLmHistory(), DateTime.now());
     } catch (e) {
       debugPrint('Adaptive Connect memory not loaded: $e');
     }
@@ -772,6 +1327,19 @@ class ColituConnectionController extends ChangeNotifier
     if (ac3 != null && ac3 != ColituAc3Switch.remote) {
       ColituAc3Switch.setRemote(ac3);
       unawaited(_quietly(() => PreferencesKey().saveColituAc3Remote(ac3)));
+    }
+    final ac4 = catalog.acEngine4;
+    if (ac4 != null && ac4 != ColituAc4Switch.enabled) {
+      ColituAc4Switch.setRemote(ac4);
+      unawaited(_quietly(() => PreferencesKey().saveColituAc4Remote(ac4)));
+      if (!ac4) _leaveWhitelistMode();
+    }
+    if (catalog.whitelistProbe.isNotEmpty) {
+      _whitelistProbe = catalog.whitelistProbe;
+      final encoded = jsonEncode(catalog.whitelistProbe);
+      unawaited(
+        _quietly(() => PreferencesKey().saveColituWhitelistProbe(encoded)),
+      );
     }
     final country = catalog.clientCountry;
     final network = catalog.clientNetwork;
@@ -929,6 +1497,7 @@ class ColituConnectionController extends ChangeNotifier
     _resetTraffic();
     _notify();
     final attempt = _telemetry.beginConnect(auto: _automatic);
+    var countedFailure = false;
     try {
       // The memory and the network decide the automatic pick: read both
       // before choosing.
@@ -939,7 +1508,19 @@ class ColituConnectionController extends ChangeNotifier
         await _connectWithoutList(serial);
         return;
       }
-      final server = target ?? effectiveServer ?? picked!;
+      _lmLead = null;
+      // Automatic mode decides here: a new exploration draw per connect (the
+      // list showed the previous one), journaled, its protocol leading.
+      final decided = _automatic && target == null;
+      if (decided) _lmSeed = ColituLm.randomSeed();
+      final ranked = decided ? _ranked(forConnect: true) : const <VPNServer>[];
+      final server =
+          target ??
+          (decided && _lastOrderEngine == ColituLm.engineAc4
+              ? ranked.firstOrNull
+              : null) ??
+          effectiveServer ??
+          picked!;
       if (_automatic && target == null && !server.isMultihop) {
         _recordChoice(server);
       }
@@ -956,13 +1537,16 @@ class ColituConnectionController extends ChangeNotifier
       final candidates = <VPNServer>[
         server,
         if (fallback)
-          ...rankedServers.where((s) => s.selectionKey != server.selectionKey),
+          ...(decided ? ranked : rankedServers).where(
+            (s) => s.selectionKey != server.selectionKey,
+          ),
       ].take(_maxServersPerConnect).toList();
       final budget = DateTime.now().add(_connectBudget);
       final failedNodes = <String>[];
       var engineStalled = false;
       for (var index = 0; index < candidates.length; index++) {
         final candidate = candidates[index];
+        _connectingKey = candidate.selectionKey;
         final last = index + 1 >= candidates.length;
         if (index > 0) {
           if (DateTime.now().isAfter(budget)) break;
@@ -1053,6 +1637,10 @@ class ColituConnectionController extends ChangeNotifier
         await _enterPause(DevicePause.fromDetails(e.details));
         return;
       }
+      // A real failure or "no internet" (under an operator whitelist the
+      // direct check fails too); plan and account errors do not count.
+      final why = ColituAcEvents.reasonOfError(e);
+      countedFailure = why != 'auth' && why != 'quota';
       await _resetTunnelState();
       if (reconnect &&
           !recovery &&
@@ -1096,6 +1684,7 @@ class ColituConnectionController extends ChangeNotifier
       _fail(colituErrorMessage(reported));
     } finally {
       _settleConnectTelemetry(attempt, serial);
+      if (countedFailure && serial == _connectSerial) _noteConnectFailure();
     }
   }
 
@@ -1410,11 +1999,27 @@ class ColituConnectionController extends ChangeNotifier
               ).compareTo(ColituVPNConfigAdapter.transportRankFor(b)),
             ))
             .firstOrNull;
-    final prefer = ColituVPNConfigAdapter.rememberedTransport(
+    var prefer = ColituVPNConfigAdapter.rememberedTransport(
       lastGood: lastGood,
       offered: offered,
       excluded: excluded,
     );
+    // Adaptive Connect 4 chose this server with this protocol: it goes first
+    // here (unless it stalled on this network or the hints demote it).
+    final lead = _lmLead;
+    final leads =
+        lead != null &&
+        !server.isMultihop &&
+        !config.isMultihop &&
+        lead.server == server.id.toLowerCase() &&
+        offered.contains(lead.protocol) &&
+        !excluded.contains(lead.protocol);
+    if (leads) {
+      prefer = lead.protocol;
+      debugPrint(
+        'Adaptive Connect 4 chose ${lead.protocol} on this server: it goes first',
+      );
+    }
     _adapter.networkToken = _hints.tokenFor(_clientNetwork);
     // No memory of this network: the transports that worked for most users
     // here go first and the probe round is skipped (Adaptive Connect 3.0).
@@ -1437,6 +2042,12 @@ class ColituConnectionController extends ChangeNotifier
       );
       if (hinted != null) {
         startOrder = [for (final c in hinted.order) c.protocolType];
+        if (leads) {
+          startOrder = [
+            lead.protocol,
+            ...startOrder.where((p) => p != lead.protocol),
+          ];
+        }
         debugPrint(
           'no memory of this network, starting with the hinted [${startOrder.take(hinted.hinted).join(', ')}]',
         );
@@ -1573,6 +2184,12 @@ class ColituConnectionController extends ChangeNotifier
               if (lastProtocol != null) {
                 if (!pending) {
                   _memory.markStalled(network, key, lastProtocol, DateTime.now());
+                  _recordLmOutcome(
+                    server.id,
+                    lastProtocol,
+                    ok: false,
+                    reason: 'no_traffic',
+                  );
                 }
                 excluded.add(lastProtocol);
               }
@@ -1619,7 +2236,9 @@ class ColituConnectionController extends ChangeNotifier
               goodServer: _automatic,
             );
             _saveMemory();
+            _recordLmOutcome(connectedTo.id, connectedProtocol, ok: true);
           }
+          _connectFailuresInRow = 0;
           _telemetry.endConnect(
             ok: true,
             nodeId: _connectedNodeId,
@@ -1648,6 +2267,12 @@ class ColituConnectionController extends ChangeNotifier
           if (!pending) {
             _memory.markStalled(network, key, lastProtocol, DateTime.now());
             _saveMemory();
+            _recordLmOutcome(
+              server.id,
+              lastProtocol,
+              ok: false,
+              reason: 'no_traffic',
+            );
           }
           excluded.add(lastProtocol);
           debugPrint('Transport $lastProtocol stalled; excluding it');
@@ -3339,7 +3964,16 @@ class ColituConnectionController extends ChangeNotifier
         probe: latencyProbe,
       );
       if (measured.isEmpty || status != ColituVpnStatus.disconnected) return;
-      await _storePings(measured, network);
+      // Only a round measured with the VPN off decides reachability; the
+      // multihop routes are not judged (their ping is the entry node's).
+      final round = {
+        for (final server in servers)
+          if (!server.isMultihop && measured.containsKey(server.selectionKey))
+            server.selectionKey: measured[server.selectionKey],
+      };
+      reachability.recordRound(round, vpnOff: true);
+      _journalPingRound(round);
+      await _storePings(measured, network, vpnOff: true);
     }();
     _pingRun = run;
     try {
@@ -3374,7 +4008,7 @@ class ColituConnectionController extends ChangeNotifier
         if (wasOk) _notify();
         return;
       }
-      await _storePings(measured, network);
+      await _storePings(measured, network, vpnOff: false);
     }();
     _pingRun = run;
     try {
@@ -3386,12 +4020,25 @@ class ColituConnectionController extends ChangeNotifier
   }
 
   /// Fresh readings into the shown pings and the stored cache.
-  Future<void> _storePings(Map<String, int?> measured, String network) async {
+  ///
+  /// With the VPN on ([vpnOff] false) a server the extension could not time
+  /// keeps the last VPN-off reading (at most 30 min old) instead of a dash:
+  /// the list never turns an alive server into "— ms" just because it
+  /// cannot be measured outside the tunnel.
+  Future<void> _storePings(
+    Map<String, int?> measured,
+    String network, {
+    required bool vpnOff,
+  }) async {
     final at = DateTime.now();
     _pings = {
       ..._pings,
       for (final entry in measured.entries)
-        entry.key: ColituPing(ms: entry.value, at: at, network: network),
+        entry.key: ServerReachability.carryOver(
+          ColituPing(ms: entry.value, at: at, network: network, vpnOff: vpnOff),
+          _pings[entry.key],
+          now: at,
+        ),
     };
     // Latency events: nodes only (a route's ping is its entry node's).
     for (final server in servers) {

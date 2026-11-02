@@ -7,6 +7,7 @@ class _FakeService extends Fake implements ColituSupportService {
   var failAnswer = false;
   var fetches = 0;
   final answers = <(String, String)>[];
+  final engines = <Map<String, dynamic>?>[];
 
   @override
   Future<DiagnosticsRequest?> pendingDiagnosticsRequest() async {
@@ -15,9 +16,14 @@ class _FakeService extends Fake implements ColituSupportService {
   }
 
   @override
-  Future<void> answerDiagnosticsRequest(String requestId, String report) async {
+  Future<void> answerDiagnosticsRequest(
+    String requestId,
+    String report, {
+    Map<String, dynamic>? engine,
+  }) async {
     if (failAnswer) throw Exception('offline');
     answers.add((requestId, report));
+    engines.add(engine);
   }
 }
 
@@ -74,6 +80,22 @@ void main() {
       service = _FakeService()..pending = const DiagnosticsRequest(id: 'r1');
       now = DateTime(2026, 10, 15, 12);
       reports = 0;
+    });
+
+    test('the engine section goes with the report', () async {
+      final watcher = DiagnosticsRequestWatcher(
+        api: service,
+        clock: () => now,
+        buildReport: () async => 'REPORT',
+        buildEngine: () => {'decisions': const [], 'flags': {'ac_engine_4': true}},
+      );
+      await watcher.check();
+      expect(service.engines.single?['flags'], {'ac_engine_4': true});
+      // Without a builder the field is left out.
+      service.pending = const DiagnosticsRequest(id: 'r2');
+      now = now.add(const Duration(minutes: 2));
+      await build().check();
+      expect(service.engines.last, isNull);
     });
 
     test('checks at most once per 60 seconds', () async {

@@ -9,6 +9,8 @@ import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/api/models/multihop_models.dart';
 import 'package:colitu_vpn/colitu/api/models/vpn_models.dart';
 import 'package:colitu_vpn/colitu/services/adaptive_connect.dart';
+import 'package:colitu_vpn/colitu/services/colitu_lm.dart';
+import 'package:colitu_vpn/colitu/services/colitu_lm_engine.dart';
 import 'package:colitu_vpn/colitu/services/notice_service.dart';
 import 'package:colitu_vpn/colitu/services/recovery_set.dart';
 import 'package:colitu_vpn/core/pigeon/constants.dart';
@@ -23,6 +25,8 @@ class ServerCatalog {
     this.clientNetwork = '',
     this.hints,
     this.adaptiveConnect3,
+    this.acEngine4,
+    this.whitelistProbe = const {},
   ]);
 
   final List<VPNServer> servers;
@@ -43,6 +47,14 @@ class ServerCatalog {
   /// The panel's Adaptive Connect 3.0 switch for this device
   /// (`features.adaptive_connect_3`); null from an older panel.
   final bool? adaptiveConnect3;
+
+  /// The panel's Adaptive Connect 4 switch (`features.ac_engine_4`); null
+  /// from an older panel.
+  final bool? acEngine4;
+
+  /// AC4 whitelist check: domestic hosts per country (`whitelist_probe`);
+  /// empty when none.
+  final Map<String, List<String>> whitelistProbe;
 }
 
 class ColituVPNService {
@@ -79,8 +91,24 @@ class ColituVPNService {
         text('client_network'),
         ColituNetworkHints.fromServers(json, text('client_network')),
         ColituAc3Switch.parse(json),
+        ColituAc4Switch.parse(json),
+        ColituWhitelist.parseProbe(json is Map ? json['whitelist_probe'] : null),
       );
     }, queryParameters: _freshQuery());
+  }
+
+  /// The Adaptive Connect 4 model (`GET /client/ac-model`). The panel finds
+  /// the country from the request IP with the VPN off, else from
+  /// [networkToken] (the last VPN-off token).
+  Future<ColituLmModel?> acModel({String? networkToken}) {
+    final token = networkToken?.trim() ?? '';
+    return _client.get(
+      APIEndpoint.acModel,
+      ColituLmModel.fromJson,
+      queryParameters: {
+        if (token.isNotEmpty && token.length <= 256) 'network_token': token,
+      },
+    );
   }
 
   /// `GET /multihop/servers`: the routes only.

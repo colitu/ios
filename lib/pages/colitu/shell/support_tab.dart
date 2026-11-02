@@ -286,9 +286,14 @@ class _NewRequestState extends State<_NewRequest> {
         // already went with the request, so a failure here is ignored.
         final service = widget.service;
         final hosts = SiteRedaction.serverHosts(c.servers);
+        final engine = c.diagnosticsEngine();
         unawaited(() async {
           try {
-            await service.uploadDiagnostics(created.id, await ColituSupportService.connectionReport(knownHosts: hosts));
+            await service.uploadDiagnostics(
+              created.id,
+              await ColituSupportService.connectionReport(knownHosts: hosts),
+              engine: engine,
+            );
           } catch (_) {}
         }());
       }

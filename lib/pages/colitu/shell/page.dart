@@ -48,6 +48,7 @@ class _ColituShellPageState extends State<ColituShellPage> {
     buildReport: () => ColituSupportService.connectionReport(
       knownHosts: SiteRedaction.serverHosts(_controller.servers),
     ),
+    buildEngine: _controller.diagnosticsEngine,
     onSent: () {
       if (mounted) showColituToast(context, ColituLoc.I['support.reportSent']);
     },

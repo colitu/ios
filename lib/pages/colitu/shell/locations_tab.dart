@@ -113,7 +113,7 @@ class _LocationsTabState extends State<LocationsTab> {
   List<VPNServer> _filtered() {
     final c = widget.controller;
     final query = _fold(_search.text.trim());
-    final items = c.servers.where((server) {
+    final items = c.visibleServers.where((server) {
       if (!server.inCategory(_activeFilter)) return false;
       if (query.isEmpty) return true;
       final haystack = _fold(
@@ -150,10 +150,11 @@ class _LocationsTabState extends State<LocationsTab> {
     final query = _fold(_search.text.trim());
     return [
       for (final route in widget.controller.multihopServers)
-        if (query.isEmpty ||
+        if (!widget.controller.ruHidden(route) &&
+            (query.isEmpty ||
             _fold(
               '${route.name} ${ColituServerNames.route(route.name)} ${route.entry?.label ?? ''} ${route.exit?.label ?? ''} ${route.entry?.country ?? ''} ${route.exit?.country ?? ''}',
-            ).contains(query))
+            ).contains(query)))
           route,
     ];
   }
@@ -213,7 +214,9 @@ class _LocationsTabState extends State<LocationsTab> {
         : _shortcuts
               .recents(known)
               .where(
-                (s) => !favorites.any((f) => f.selectionKey == s.selectionKey),
+                (s) =>
+                    !favorites.any((f) => f.selectionKey == s.selectionKey) &&
+                    !c.ruHidden(s),
               )
               .toList();
     Widget shortcutCard(VPNServer server) => Padding(
@@ -765,7 +768,12 @@ class _RowBody extends StatelessWidget {
     required this.trailing,
     this.connected = false,
     this.badge,
+    this.tag,
   });
+
+  /// Small pill on its own last line (the "Recommended" mark), so it never
+  /// takes room from the name or the city.
+  final Widget? tag;
 
   final Widget leading;
   final String title;
@@ -806,6 +814,7 @@ class _RowBody extends StatelessWidget {
                 const SizedBox(height: 3),
                 _SubLine(subtitle, connected: connected),
               ],
+              if (tag != null) ...[const SizedBox(height: 5), tag!],
             ],
           ),
         ),
@@ -1021,7 +1030,7 @@ class _ServerCard extends StatelessWidget {
         ? city
         : '';
     return Opacity(
-      opacity: selectable ? 1 : 0.5,
+      opacity: selectable ? (c.isDimmed(server) ? _dimmedOpacity : 1) : 0.5,
       child: _Press(
         onTap: selectable ? () => c.selectServer(server) : null,
         child: _Card(
@@ -1036,6 +1045,7 @@ class _ServerCard extends StatelessWidget {
             subtitle: subtitle,
             connected: connected,
             badge: _badgeFor(server),
+            tag: server.isRecommended ? const _RecommendedBadge() : null,
             trailing: [
               if (selectable && !c.pingFailed(server))
                 _Ping(c.pingOf(server))
@@ -1115,6 +1125,35 @@ Widget? _badgeFor(VPNServer server) {
     );
   }
   return null;
+}
+
+/// An unreachable server kept in the list (a favourite, or the picked one).
+const _dimmedOpacity = 0.55;
+
+/// Small "Recommended" pill: the panel marks the best server of a country.
+class _RecommendedBadge extends StatelessWidget {
+  const _RecommendedBadge();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('recommendedBadge'),
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(
+      color: ColituColors.surface2,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: _recommendedBorder),
+    ),
+    child: Text(
+      ColituLoc.I['server.recommendedBadge'],
+      maxLines: 1,
+      style: const TextStyle(
+        fontSize: 11,
+        height: 1.2,
+        fontWeight: FontWeight.w600,
+        color: ColituColors.lilac,
+      ),
+    ),
+  );
 }
 
 /// Premium server: a small star (read as "Premium") so the name keeps its
@@ -1395,7 +1434,7 @@ class _CityRow extends StatelessWidget {
     final selectable = server.isSelectable;
     final tags = _tagsOf(server);
     return Opacity(
-      opacity: selectable ? 1 : 0.5,
+      opacity: selectable ? (c.isDimmed(server) ? _dimmedOpacity : 1) : 0.5,
       child: _Press(
         key: ValueKey('city.${server.selectionKey}'),
         onTap: selectable ? () => c.selectServer(server) : null,
@@ -1437,6 +1476,10 @@ class _CityRow extends StatelessWidget {
                         ] else if (server.isPremium) ...[
                           const SizedBox(width: 8),
                           const _PremiumBadge(),
+                        ],
+                        if (server.isRecommended) ...[
+                          const SizedBox(width: 8),
+                          const _RecommendedBadge(),
                         ],
                       ],
                     ),

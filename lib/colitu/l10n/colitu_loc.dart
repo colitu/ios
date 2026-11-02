@@ -2977,6 +2977,17 @@ class ColituLoc extends ChangeNotifier {
     'plan.goPremium': ['Перейти на Premium', 'Premium’a geç', 'Go Premium'],
     'plan.premiumBadge': ['Premium', 'Premium', 'Premium'],
     'server.unreachable': ['Недоступен', 'Ulaşılamıyor', 'Unreachable'],
+    'server.recommendedBadge': ['Рекомендуем', 'Önerilen', 'Recommended'],
+    'notice.whitelistOn': [
+      'Ваш оператор работает в режиме белого списка, подключаемся к подходящему серверу.',
+      'Operatörünüz beyaz liste modunda, uygun sunucuya geçildi.',
+      'Your operator is in whitelist mode; switched to a suitable server.',
+    ],
+    'notice.whitelistNone': [
+      'Ваш оператор работает в режиме белого списка. Подходящего сервера пока нет.',
+      'Operatörünüz beyaz liste modunda. Uygun sunucu henüz yok.',
+      'Your operator is in whitelist mode. No suitable server is available yet.',
+    ],
     'locations.searchLabel': ['Поиск сервера', 'Sunucu ara', 'Search servers'],
     'locations.clearSearch': ['Очистить поиск', 'Aramayı temizle', 'Clear search'],
     'support.removeFile': ['Удалить файл {name}', '{name} dosyasını kaldır', 'Remove file {name}'],

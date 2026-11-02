@@ -345,6 +345,40 @@ class PreferencesKey {
 
   Future<void> clearColituAc3Remote() => _prefs.remove(_colituAc3Remote);
 
+  static const _colituAc4Remote = "colituAc4Remote";
+  static const _colituWhitelistProbe = "colituWhitelistProbe";
+  static const _colituAcModel = "colituAcModel";
+  static const _colituLmHistory = "colituLmHistory";
+
+  /// The panel's last Adaptive Connect 4 switch (`features.ac_engine_4`).
+  Future<bool> readColituAc4Remote() async =>
+      await _prefs.getBool(_colituAc4Remote) ?? false;
+
+  Future<void> saveColituAc4Remote(bool value) =>
+      _prefs.setBool(_colituAc4Remote, value);
+
+  Future<void> clearColituAc4Remote() => _prefs.remove(_colituAc4Remote);
+
+  /// AC4 whitelist check hosts per country (`whitelist_probe`, JSON).
+  Future<String?> readColituWhitelistProbe() =>
+      _prefs.getString(_colituWhitelistProbe);
+
+  Future<void> saveColituWhitelistProbe(String value) =>
+      _prefs.setString(_colituWhitelistProbe, value);
+
+  /// The last AC4 decision model and when it was fetched (JSON).
+  Future<String?> readColituAcModel() => _prefs.getString(_colituAcModel);
+
+  Future<void> saveColituAcModel(String value) =>
+      _prefs.setString(_colituAcModel, value);
+
+  /// This device's AC4 outcomes per (network hash, server, protocol) (JSON);
+  /// never sent.
+  Future<String?> readColituLmHistory() => _prefs.getString(_colituLmHistory);
+
+  Future<void> saveColituLmHistory(String value) =>
+      _prefs.setString(_colituLmHistory, value);
+
   static const _colituWarmSpare = "colituWarmSpare";
   static const _colituWarmSpareChoice = "colituWarmSpareChoice";
 

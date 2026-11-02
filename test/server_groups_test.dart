@@ -186,6 +186,35 @@ void main() {
       expect(find.byIcon(CupertinoIcons.checkmark_alt), findsOneWidget);
     });
 
+    testWidgets('the panel recommended server carries a small badge', (
+      tester,
+    ) async {
+      await pump(tester);
+      expect(find.byKey(const ValueKey('recommendedBadge')), findsOneWidget);
+    });
+
+    testWidgets('a server unreachable twice leaves the list, unless picked', (
+      tester,
+    ) async {
+      final c = await pump(tester);
+      expect(find.text('Netherlands'), findsOneWidget);
+      Map<String, int?> round() => {
+        de1.selectionKey: 30,
+        nl.selectionKey: null,
+        de2.selectionKey: 30,
+        ee.selectionKey: 30,
+      };
+      c.reachability.recordRound(round(), vpnOff: true);
+      c.reachability.recordRound(round(), vpnOff: true);
+      expect(c.visibleServers.map((s) => s.id), ['de1', 'de2', 'ee1']);
+      expect(c.rankedServers.map((s) => s.id), isNot(contains('nl1')));
+      c.autoSelection = false;
+      c.selectedServer = nl;
+      expect(c.visibleServers.map((s) => s.id), contains('nl1'));
+      expect(c.isDimmed(nl), isTrue);
+      expect(c.isDimmed(de1), isFalse);
+    });
+
     testWidgets('a search lists matches flat', (tester) async {
       await pump(tester);
       await tester.enterText(find.byType(TextField), 'ber');
