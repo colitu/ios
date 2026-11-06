@@ -1,7 +1,7 @@
 name: colitu_vpn
 description: "Colitu Secure VPN"
 publish_to: "none"
-version: 5.10.1+77
+version: 5.10.2+78
 
 environment:
   sdk: ">=3.8.0 <4.0.0"

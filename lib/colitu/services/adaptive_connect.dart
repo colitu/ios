@@ -396,6 +396,29 @@ class ColituAdaptiveMemory {
   }
 }
 
+/// Which answers of the panel may speak for the device's own network. The
+/// panel names the country and network it sees the request come from: with
+/// the VPN on that is the exit, empty for a node it knows, but filled for a
+/// bridge exit it does not know yet.
+abstract final class ColituListGuard {
+  /// Nothing of a tunnel is up or on its way; connecting and disconnecting
+  /// count as on.
+  static bool vpnOff({required bool disconnected, required bool tunnelActive}) =>
+      disconnected && !tunnelActive;
+
+  /// The list's country, network and hints count only when it was both asked
+  /// and answered with the VPN off.
+  static bool trustsPlace({
+    required bool offWhenAsked,
+    required bool offWhenAnswered,
+  }) => offWhenAsked && offWhenAnswered;
+
+  /// With the VPN on only the token tells the panel the network; without it
+  /// the stored model stays.
+  static bool fetchesModel({required bool vpnOff, String? token}) =>
+      vpnOff || (token != null && token.trim().isNotEmpty);
+}
+
 /// The panel's network hints: protocols that fail for most users on the
 /// user's ISP network (or country), with the anonymous token that lets this
 /// device's protocol observations count for that network. Kept from the

@@ -52,6 +52,7 @@ class ColituTelemetry {
   DateTime? _attemptAt;
   var _first = false;
   var _auto = false;
+  String? _engine;
   String? _node;
   String? _protocol;
   var _fallbacks = 0;
@@ -96,6 +97,7 @@ class ColituTelemetry {
     abandonConnect();
     _attemptAt = _clock();
     _auto = auto;
+    _engine = null;
     _node = null;
     _protocol = null;
     _fallbacks = 0;
@@ -174,11 +176,16 @@ class ColituTelemetry {
           ms: ms,
           firstTry: _fallbacks == 0,
           auto: _auto,
+          engine: _engine,
         ),
       );
     }
     if (first) unawaited(metrics.markFirstDone());
   }
+
+  /// What ordered the open automatic connect (`ac4`, `ac3`, `panel`); a
+  /// manual connect has none.
+  void noteEngine(String engine) => _engine = engine;
 
   /// The user cancelled, a newer connect took over or the device was paused:
   /// neither a success nor a failure.

@@ -33,6 +33,15 @@ abstract final class ColituAc4Switch {
 /// Adaptive Connect 4 around the model ([ColituLm]): the candidates built
 /// from the server list and the server order a decision gives. Pure logic.
 abstract final class ColituLmPlanner {
+  /// [model] when it was built for the network's country, else null (AC 3
+  /// rules until the right one comes): another country's priors miss and
+  /// every server scores alike. Both empty count as equal.
+  static ColituLmModel? modelFor(ColituLmModel? model, String? networkCountry) {
+    if (model == null) return null;
+    final built = (model.country ?? '').trim().toUpperCase();
+    return built == (networkCountry ?? '').trim().toUpperCase() ? model : null;
+  }
+
   /// The name ends in the bridge suffix ("Finlandiya (Köprü)", "… (Мост)",
   /// "… (Bridge)"): a node whose entry address is in Russia and whose
   /// traffic leaves abroad (its country is the exit's).

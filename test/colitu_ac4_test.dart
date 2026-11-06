@@ -9,6 +9,7 @@ import 'package:colitu_vpn/colitu/services/colitu_lm.dart';
 import 'package:colitu_vpn/colitu/services/colitu_lm_engine.dart';
 import 'package:colitu_vpn/colitu/services/connection_controller.dart';
 import 'package:colitu_vpn/colitu/services/engine_journal.dart';
+import 'package:colitu_vpn/colitu/services/vpn_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 String _uuid(String tail) => '00000000-0000-4000-8000-${tail.padLeft(12, '0')}';
@@ -339,12 +340,47 @@ void main() {
 
     test('switch on with a model: the model orders, RU never chosen', () {
       ColituAc4Switch.setRemote(true);
-      final c = ColituConnectionController()..servers = servers;
+      final c = ColituConnectionController()
+        ..servers = servers
+        ..debugClientCountry = 'RU';
       addTearDown(c.dispose);
       c.debugSetAcModel(_model, DateTime.now());
       expect(c.rankedServers.map((s) => s.id), isNot(contains(_uuid('1'))));
       c.debugWhitelistMode = true;
       expect(c.rankedServers.map((s) => s.id), [_uuid('2'), _uuid('1')]);
+    });
+
+    test('a model of another country leaves the AC 3 rules, with the reason', () {
+      ColituAc4Switch.setRemote(true);
+      final c = ColituConnectionController()
+        ..servers = servers
+        ..debugClientCountry = 'FI';
+      addTearDown(c.dispose);
+      final none = ColituConnectionController()
+        ..servers = servers
+        ..debugClientCountry = 'FI';
+      addTearDown(none.dispose);
+      c.debugSetAcModel(_model, DateTime.now());
+      expect(c.rankedServers.map((s) => s.id), none.rankedServers.map((s) => s.id));
+      c.debugDecideForConnect();
+      final last = ColituEngineJournal.instance.snapshot().last;
+      expect((last.data! as Map)['reason'], 'ac3_model_country');
+    });
+
+    test('a model is for the country it was built for', () {
+      const ru = ColituLmModel(version: 1, country: 'RU');
+      expect(ColituLmPlanner.modelFor(ru, 'RU'), same(ru));
+      expect(ColituLmPlanner.modelFor(ru, ' ru '), same(ru));
+      expect(ColituLmPlanner.modelFor(ru, 'FI'), isNull);
+      expect(ColituLmPlanner.modelFor(ru, ''), isNull);
+      expect(ColituLmPlanner.modelFor(ru, null), isNull);
+      expect(ColituLmPlanner.modelFor(null, 'RU'), isNull);
+      const spaced = ColituLmModel(version: 1, country: ' tr ');
+      expect(ColituLmPlanner.modelFor(spaced, 'TR'), same(spaced));
+      const none = ColituLmModel(version: 1);
+      expect(ColituLmPlanner.modelFor(none, ''), same(none));
+      expect(ColituLmPlanner.modelFor(none, null), same(none));
+      expect(ColituLmPlanner.modelFor(none, 'RU'), isNull);
     });
 
     test('switch on without a model: AC 3 order, whitelist mode keeps to its servers', () {
@@ -382,6 +418,90 @@ void main() {
       foreignUp = true;
       await c.checkWhitelist('re-check', afterFailures: false);
       expect(c.whitelistMode, isFalse);
+    });
+
+    test('only a list asked and answered with the VPN off names the home network', () {
+      expect(ColituListGuard.vpnOff(disconnected: true, tunnelActive: false), isTrue);
+      // After a relaunch the status lags behind a running tunnel.
+      expect(ColituListGuard.vpnOff(disconnected: true, tunnelActive: true), isFalse);
+      expect(ColituListGuard.vpnOff(disconnected: false, tunnelActive: false), isFalse);
+      expect(
+        ColituListGuard.trustsPlace(offWhenAsked: true, offWhenAnswered: true),
+        isTrue,
+      );
+      expect(
+        ColituListGuard.trustsPlace(offWhenAsked: false, offWhenAnswered: true),
+        isFalse,
+      );
+      expect(
+        ColituListGuard.trustsPlace(offWhenAsked: true, offWhenAnswered: false),
+        isFalse,
+      );
+    });
+
+    test('a list through a bridge keeps country, network and hints', () {
+      final c = ColituConnectionController()..debugClientCountry = 'RU';
+      addTearDown(c.dispose);
+      c.debugHints = const ColituNetworkHints(clientNetwork: 'home-net', token: 'home');
+      const exit = ColituNetworkHints(clientNetwork: 'exit-net', token: 'exit');
+      const list = ServerCatalog([], [], 'FI', 'exit-net', exit);
+
+      c.debugRememberPlace(list, trusted: false);
+      expect(c.networkCountry, 'RU');
+      expect(c.debugClientNetwork, 'home-net');
+      expect(c.debugHintToken, 'home');
+
+      c.debugRememberPlace(list, trusted: true);
+      expect(c.networkCountry, 'FI');
+      expect(c.debugClientNetwork, 'exit-net');
+      expect(c.debugHintToken, 'exit');
+    });
+
+    group('model fetch with the VPN on', () {
+      const fetched = ColituLmModel(version: 1, country: 'FI');
+
+      ColituConnectionController controller(List<String?> asked) {
+        ColituAc4Switch.setRemote(true);
+        final c = ColituConnectionController()
+          ..status = ColituVpnStatus.connected
+          ..acModelFetch = ((token) async {
+            asked.add(token);
+            return fetched;
+          });
+        addTearDown(c.dispose);
+        return c;
+      }
+
+      test('no token: nothing is fetched, the stored model stays', () async {
+        final asked = <String?>[];
+        final c = controller(asked);
+        c.debugSetAcModel(_model, DateTime.now().subtract(const Duration(days: 1)));
+        await c.debugRefreshAcModel();
+        expect(asked, isEmpty);
+        expect(c.acModel, same(_model));
+      });
+
+      test('with the token it is asked for that network', () async {
+        final asked = <String?>[];
+        final c = controller(asked);
+        c.debugHints = const ColituNetworkHints(clientNetwork: 'home-net', token: 'home');
+        await c.debugRefreshAcModel();
+        expect(asked, ['home']);
+      });
+
+      test('connecting counts as on', () async {
+        final asked = <String?>[];
+        final c = controller(asked)..status = ColituVpnStatus.connecting;
+        await c.debugRefreshAcModel();
+        expect(asked, isEmpty);
+      });
+
+      test('VPN off: fetched without a token', () async {
+        final asked = <String?>[];
+        final c = controller(asked)..status = ColituVpnStatus.disconnected;
+        await c.debugRefreshAcModel();
+        expect(asked, [null]);
+      });
     });
 
     test('Russian servers leave the list unless the app speaks Russian', () async {

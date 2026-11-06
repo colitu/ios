@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:colitu_vpn/colitu/api/api_endpoint.dart';
 import 'package:colitu_vpn/colitu/api/api_error.dart';
 import 'package:colitu_vpn/colitu/l10n/colitu_errors.dart';
+import 'package:colitu_vpn/colitu/services/colitu_lm.dart';
 import 'package:colitu_vpn/colitu/services/colitu_metrics.dart';
 
 /// Adaptive Connect telemetry: one small event per connect, recovery,
@@ -15,6 +16,15 @@ import 'package:colitu_vpn/colitu/services/colitu_metrics.dart';
 /// protocols, never an account, an address or a site. Mirrors the Android
 /// `ColituAcEvents`.
 abstract final class ColituAcEvents {
+  /// An automatic connect without a server list: the panel chose (next to
+  /// [ColituLm.engineAc4] and [ColituLm.engineAc3]).
+  static const enginePanel = 'panel';
+  static const _engines = {
+    ColituLm.engineAc4,
+    ColituLm.engineAc3,
+    enginePanel,
+  };
+
   static const maxQueue = 1000;
   static const maxBatch = 300;
   static const maxMs = 600000;
@@ -147,6 +157,7 @@ abstract final class ColituAcEvents {
     required int ms,
     required bool firstTry,
     required bool auto,
+    String? engine,
   }) {
     final n = _node(nodeId);
     final p = _protocol(protocol);
@@ -163,6 +174,7 @@ abstract final class ColituAcEvents {
       'ms': _clamp(ms),
       'first_try': firstTry,
       'mode': auto ? 'auto' : 'manual',
+      if (auto && _engines.contains(engine)) 'engine': engine,
     };
   }
 

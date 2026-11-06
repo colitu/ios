@@ -558,9 +558,16 @@ class ColituConnectionController extends ChangeNotifier
         panelStatus = panel;
         await _enforcePanelStatus(panel);
       }
+      final offWhenAsked = _vpnReallyOff;
       final fresh = await _readServers();
       await _ensureAdaptive();
-      _rememberPlace(fresh);
+      _rememberPlace(
+        fresh,
+        trusted: ColituListGuard.trustsPlace(
+          offWhenAsked: offWhenAsked,
+          offWhenAnswered: _vpnReallyOff,
+        ),
+      );
       if (fresh.servers.isNotEmpty) {
         servers = fresh.servers;
         multihopServers = fresh.multihop;
@@ -880,6 +887,29 @@ class ColituConnectionController extends ChangeNotifier
   @visibleForTesting
   set debugClientCountry(String country) => _clientCountry = country;
 
+  @visibleForTesting
+  String get debugClientNetwork => _clientNetwork;
+
+  @visibleForTesting
+  String? get debugHintToken => _hints.tokenFor(_clientNetwork);
+
+  @visibleForTesting
+  set debugHints(ColituNetworkHints hints) {
+    _hints = hints;
+    _clientNetwork = hints.clientNetwork;
+  }
+
+  @visibleForTesting
+  void debugRememberPlace(ServerCatalog catalog, {required bool trusted}) =>
+      _rememberPlace(catalog, trusted: trusted);
+
+  @visibleForTesting
+  Future<void> debugRefreshAcModel() => _refreshAcModelIfDue();
+
+  /// Runs the connect-time decision alone: journaled like a real connect.
+  @visibleForTesting
+  void debugDecideForConnect() => _ranked(forConnect: true);
+
   /// The `engine` section of the support report (AC4 phase 4): the engine
   /// journal, the servers hidden now, the model version and the flags,
   /// masked like the report. Null when it cannot be built.
@@ -932,8 +962,9 @@ class ColituConnectionController extends ChangeNotifier
     return ping != null && ping.isUsable(network, now) ? ping.ms : null;
   }
 
-  /// The AC4 order, or null when the AC 3 rules apply (no model yet,
-  /// unknown version) and whitelist mode has no flagged server.
+  /// The AC4 order, or null when the AC 3 rules apply (no model yet, a model
+  /// of another country, unknown version) and whitelist mode has no flagged
+  /// server.
   List<VPNServer>? _decideAc4(
     String network,
     DateTime now, {
@@ -947,8 +978,9 @@ class ColituConnectionController extends ChangeNotifier
       hintedServers: _hints.blockedServersFor(_clientNetwork),
       history: (id, protocol) => _lmHistory.outcomes(network, id, protocol, now),
     );
+    final model = ColituLmPlanner.modelFor(_lmModel.model, _clientCountry);
     final input = ColituLmInput(
-      model: _lmModel.model,
+      model: model,
       modelAgeH: _lmModel.ageH(now),
       engineEnabled: true,
       country: _clientCountry,
@@ -979,6 +1011,8 @@ class ColituConnectionController extends ChangeNotifier
               ? 'ac3_whitelist'
               : _lmModel.model == null
               ? 'ac3_no_model'
+              : model == null
+              ? 'ac3_model_country'
               : 'ac3_model_version',
         );
       }
@@ -1108,16 +1142,17 @@ class ColituConnectionController extends ChangeNotifier
   /// Fetches the AC4 model when it is due (none, older than 1 h, another
   /// country); never throws.
   Future<void> _refreshAcModelIfDue() async {
+    // With the VPN off the panel takes the country from the request; through
+    // the tunnel from the token, and without one it would only see the exit:
+    // the stored model stays.
+    final off = _vpnReallyOff;
+    final token = off ? null : _hints.tokenFor(_clientNetwork);
     if (!ColituAc4Switch.enabled ||
+        !ColituListGuard.fetchesModel(vpnOff: off, token: token) ||
         !_lmModel.takeFetchSlot(DateTime.now(), _clientCountry)) {
       return;
     }
     try {
-      // With the VPN off the panel takes the country from the request;
-      // through the tunnel from the token.
-      final token = status == ColituVpnStatus.disconnected
-          ? null
-          : _hints.tokenFor(_clientNetwork);
       final fetch = acModelFetch;
       final model = await (fetch != null
               ? fetch(token)
@@ -1393,9 +1428,29 @@ class ColituConnectionController extends ChangeNotifier
     }
   }
 
-  /// Keeps the last non-empty client country and network: a list fetched
-  /// through the tunnel carries neither, and must not overwrite them.
-  void _rememberPlace(ServerCatalog catalog) {
+  /// No tunnel is up or on its way, as far as the app can tell. [status]
+  /// alone is not enough: after a relaunch with the tunnel up, or a start by
+  /// iOS (on demand), it says disconnected until the next tick.
+  bool get _vpnReallyOff {
+    var active = false;
+    try {
+      active =
+          AppEventBus.instance.state.vpnLoading ||
+          engine.VpnService().vpnRunning;
+    } catch (_) {
+      // The event bus is not available during a few early startup paths.
+    }
+    return ColituListGuard.vpnOff(
+      disconnected: status == ColituVpnStatus.disconnected,
+      tunnelActive: active,
+    );
+  }
+
+  /// Keeps the last non-empty client country and network, of a list fetched
+  /// with the VPN off only ([trusted]): through the tunnel the panel sees the
+  /// exit, empty for a node it knows, but a bridge exit it does not know
+  /// would become this device's home.
+  void _rememberPlace(ServerCatalog catalog, {required bool trusted}) {
     // Through the VPN too: the switch belongs to the device, not the network.
     final ac3 = catalog.adaptiveConnect3;
     if (ac3 != null && ac3 != ColituAc3Switch.remote) {
@@ -1417,6 +1472,14 @@ class ColituConnectionController extends ChangeNotifier
     }
     final country = catalog.clientCountry;
     final network = catalog.clientNetwork;
+    if (!trusted) {
+      if (country.isNotEmpty || network.isNotEmpty) {
+        debugPrint(
+          'A list fetched through the VPN named a network (an exit the panel does not know); ignored',
+        );
+      }
+      return;
+    }
     if (country.isNotEmpty && country != _clientCountry) {
       _clientCountry = country;
       unawaited(_quietly(() => PreferencesKey().saveColituClientCountry(country)));
@@ -1579,6 +1642,9 @@ class ColituConnectionController extends ChangeNotifier
       await _refreshNetwork();
       if (serial != _connectSerial) return;
       if (listless) {
+        // Nothing on the device ordered it: the servers and their order are
+        // the panel's.
+        _telemetry.noteEngine(ColituAcEvents.enginePanel);
         await _connectWithoutList(serial);
         return;
       }
@@ -1588,6 +1654,7 @@ class ColituConnectionController extends ChangeNotifier
       final decided = _automatic && target == null;
       if (decided) _lmSeed = ColituLm.randomSeed();
       final ranked = decided ? _ranked(forConnect: true) : const <VPNServer>[];
+      if (decided) _telemetry.noteEngine(_lastOrderEngine);
       final server =
           target ??
           (decided && _lastOrderEngine == ColituLm.engineAc4

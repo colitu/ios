@@ -30,6 +30,30 @@ APIException _api(APIErrorCode code, {String? backend}) =>
     APIException(code, 'x', backendCode: backend);
 
 void main() {
+  group('connect event engine', () {
+    Map<String, dynamic> event(bool auto, String? engine) => ColituAcEvents.connect(
+      nodeId: _n1,
+      protocol: 'trojan',
+      ok: true,
+      ms: 1,
+      firstTry: true,
+      auto: auto,
+      engine: engine,
+    )!;
+
+    test('ac4, ac3 and panel are named, anything else is left out', () {
+      expect(event(true, 'ac4')['engine'], 'ac4');
+      expect(event(true, 'ac3')['engine'], 'ac3');
+      expect(event(true, ColituAcEvents.enginePanel)['engine'], 'panel');
+      expect(event(true, 'other').containsKey('engine'), isFalse);
+      expect(event(true, null).containsKey('engine'), isFalse);
+    });
+
+    test('a manual connect has none', () {
+      expect(event(false, 'ac4').containsKey('engine'), isFalse);
+    });
+  });
+
   group('reason mapping', () {
     test('errors of the connect flow', () {
       expect(ColituAcEvents.reasonOfError(TimeoutException('x')), 'timeout');
@@ -433,6 +457,26 @@ void main() {
       t.beginConnect(auto: false);
       await metrics.idle();
       expect((await metrics.snapshot()).counters['first_connect_attempts'], 1);
+    });
+
+    test('the engine goes with an automatic connect only, for that connect only', () async {
+      var id = t.beginConnect(auto: true);
+      await metrics.idle();
+      t.noteEngine('ac4');
+      t.tryingConnect(nodeId: _n1, protocol: 'hysteria2', fallbacks: 0);
+      t.endConnect(ok: true, nodeId: _n1, protocol: 'hysteria2', id: id);
+      id = t.beginConnect(auto: true);
+      await metrics.idle();
+      t.tryingConnect(nodeId: _n1, protocol: 'hysteria2', fallbacks: 0);
+      t.endConnect(ok: true, nodeId: _n1, protocol: 'hysteria2', id: id);
+      id = t.beginConnect(auto: false);
+      await metrics.idle();
+      t.noteEngine('ac3');
+      t.tryingConnect(nodeId: _n1, protocol: 'hysteria2', fallbacks: 0);
+      t.endConnect(ok: true, nodeId: _n1, protocol: 'hysteria2', id: id);
+      final list = await queued();
+      expect(list.map((e) => e['engine']), ['ac4', null, null]);
+      expect(list.last.containsKey('engine'), isFalse);
     });
 
     test('a failed connect names the reason and the server it fell back to', () async {

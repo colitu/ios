@@ -134,7 +134,9 @@ blocks a connect or a sign-up; every failure is ignored.
   Event kinds (`node_id` lower-case UUID of the server list, `protocol` one of
   vless-reality, vless-xhttp, hysteria2, trojan, shadowsocks, tuic, `ms` 0-600000):
   `connect {node_id, protocol, outcome ok|fail, reason?, ms, first_try, mode
-  auto|manual}` (one per connect flow, auto and manual), `recovery {node_id,
+  auto|manual, engine? ac4|ac3|panel}` (one per connect flow, auto and manual;
+  `engine` says what ordered an automatic connect, `panel` when it had no server
+  list; absent for a manual one), `recovery {node_id,
   protocol, to_protocol?, outcome, reason?, ms, detect_ms?, spare}`,
   `switch {protocol, to_protocol?, outcome, flap}`, `drop {node_id, protocol,
   reason, minutes}`, `probe {node_id, outcome, ms?}` (last per node per hour),
